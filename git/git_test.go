@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -246,11 +247,72 @@ func TestRunnerKeepsStderrOutOfParsedOutput(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Status == 0 || !strings.HasPrefix(ce.Error(), "git cat-file -p HEAD:no-such-file failed (status ") {
 		t.Fatalf("error = %v", err)
 	}
-	// A warning on stderr does not leak into the parsed path list.
-	f.write(t, "a.txt", "x\n")
-	f.git(t, "add", "a.txt")
-	paths := must(f.ChangedPaths())
-	equal(t, "paths", strings.Join(paths, ","), "a.txt")
+
+	outsideDir := t.TempDir()
+	outside := New(outsideDir, append(f.Env, "GIT_CEILING_DIRECTORIES="+filepath.Dir(outsideDir)))
+	res, err = outside.Run("status", "--porcelain=v1")
+	if err != nil || res.Status == 0 || res.Stderr == "" {
+		t.Fatalf("outside status = %+v, %v", res, err)
+	}
+	if _, err := outside.OK("status", "--porcelain=v1"); err == nil {
+		t.Fatal("OK status outside repository succeeded")
+	}
+	if paths, err := outside.ChangedPaths(); err == nil {
+		t.Fatalf("ChangedPaths outside repository = %q, nil", paths)
+	}
+}
+
+func TestStatusIgnoresAttributesWarnings(t *testing.T) {
+	f := newFixture(t)
+	home := t.TempDir()
+	f.Env = append(f.Env, "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"))
+	f.Repo.Env = f.Env
+	attrs := filepath.Join(t.TempDir(), "attrs")
+	if err := os.Symlink("attrs", attrs); err != nil {
+		t.Fatal(err)
+	}
+	f.write(t, "notes.txt", "original\n")
+	f.git(t, "add", "notes.txt")
+	f.git(t, "commit", "-qm", "notes")
+
+	var tick int64
+	observe := func(wantStatus string, wantPaths []string) {
+		t.Helper()
+		for _, warning := range []bool{false, true, false} {
+			// Force a stat mismatch on each observation, including after the helper
+			// refreshes the index; observing calls must not refresh it themselves.
+			tick++
+			stamp := time.Unix(tick, 0)
+			if err := os.Chtimes(filepath.Join(f.Dir, "notes.txt"), stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+			if warning {
+				f.configure(t, "core.attributesFile", attrs)
+			} else {
+				f.configure(t, "core.attributesFile", filepath.Join(home, "no-attributes"))
+			}
+			res, err := f.Observing().Run("status", "--porcelain=v1")
+			if err != nil || res.Status != 0 || res.Stdout != wantStatus {
+				t.Fatalf("warning %v: status = %+v, %v; want stdout %q", warning, res, err, wantStatus)
+			}
+			if got := strings.Contains(res.Stderr, "warning: unable to access") && strings.Contains(res.Stderr, attrs); got != warning {
+				t.Fatalf("warning %v: stderr = %q", warning, res.Stderr)
+			}
+			if !warning && res.Stderr != "" {
+				t.Fatalf("unexpected stderr: %q", res.Stderr)
+			}
+			equal(t, "OK status", must(f.Observing().OK("status", "--porcelain=v1")), wantStatus)
+			paths, err := f.Observing().ChangedPaths()
+			if err != nil || !slices.Equal(paths, wantPaths) {
+				t.Fatalf("warning %v: paths = %q, %v; want %q", warning, paths, err, wantPaths)
+			}
+			equal(t, "helper status", f.git(t, "status", "--porcelain=v1"), wantStatus)
+		}
+	}
+	observe("", nil)
+	f.write(t, "notes.txt", "modified\n")
+	f.write(t, "untracked.txt", "untracked\n")
+	observe(" M notes.txt\n?? untracked.txt\n", []string{"notes.txt", "untracked.txt"})
 }
 
 func TestChildrenDoNotInheritRepositoryLocation(t *testing.T) {
