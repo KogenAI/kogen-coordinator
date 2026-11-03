@@ -1,0 +1,183 @@
+// Contract usage observer of K-CONTRACTS-COORDINATOR. Run it in a kogen-coordinator checkout
+// with package patterns (for example ./contract/...). It type-checks those packages, their test
+// files included, and prints one JSON object: "uses", every exported member of
+// github.com/KogenAI/kogen-coordinator/project, git and durable the files use, as "<pkg>.<Name>"
+// or "<pkg>.<Type>.<Member>"; "imports", every import path of those files; "files", the Go files
+// it read. It exits 2 when a named package is missing or does not type-check.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+type pkg struct {
+	ImportPath, Dir, Export, ForTest string
+	GoFiles                          []string
+	ImportMap                        map[string]string
+	DepOnly                          bool
+	Error                            *struct{ Err string }
+}
+
+var tracked = map[string]bool{
+	"github.com/KogenAI/kogen-coordinator/project": true,
+	"github.com/KogenAI/kogen-coordinator/git":     true,
+	"github.com/KogenAI/kogen-coordinator/durable": true,
+}
+
+func fail(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	os.Exit(2)
+}
+
+func main() {
+	args := append([]string{"list", "-e", "-export", "-deps", "-test", "-json"}, os.Args[1:]...)
+	cmd := exec.Command("go", args...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		fail("go %s: %v", strings.Join(args, " "), err)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(out)))
+	var pkgs []pkg
+	exports := map[string]string{}
+	for {
+		var p pkg
+		if err := dec.Decode(&p); err == io.EOF {
+			break
+		} else if err != nil {
+			fail("go list output: %v", err)
+		}
+		pkgs = append(pkgs, p)
+		if p.Export != "" {
+			exports[p.ImportPath] = p.Export
+		}
+	}
+	uses, imports, files := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, p := range pkgs {
+		// A named package, its test variant "<path> [<path>.test]" (the package with its
+		// in-package tests) and its external tests "<path>_test [<path>.test]": go list
+		// reports each one's own files as GoFiles.
+		if p.DepOnly || strings.HasSuffix(p.ImportPath, ".test") {
+			continue
+		}
+		// A directory of test files only has no non-test files; that is not an error here.
+		if p.Error != nil && !strings.Contains(p.Error.Err, "no non-test Go files") {
+			fail("%s: %s", p.ImportPath, p.Error.Err)
+		}
+		fs := token.NewFileSet()
+		var afs []*ast.File
+		for _, f := range p.GoFiles {
+			path := filepath.Join(p.Dir, f)
+			af, err := parser.ParseFile(fs, path, nil, 0)
+			if err != nil {
+				fail("%v", err)
+			}
+			afs = append(afs, af)
+			files[path] = true
+			for _, im := range af.Imports {
+				imports[strings.Trim(im.Path.Value, `"`)] = true
+			}
+		}
+		imp := importer.ForCompiler(fs, "gc", func(path string) (io.ReadCloser, error) {
+			if m, ok := p.ImportMap[path]; ok {
+				path = m
+			}
+			e, ok := exports[path]
+			if !ok {
+				return nil, fmt.Errorf("no export data for %s", path)
+			}
+			return os.Open(e)
+		})
+		info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+		var errs []string
+		conf := types.Config{Importer: imp, Error: func(err error) { errs = append(errs, err.Error()) }}
+		conf.Check(p.ImportPath, fs, afs, info)
+		if len(errs) > 0 {
+			fail("type-checking %s: %s", p.ImportPath, strings.Join(errs, "; "))
+		}
+		for _, obj := range info.Uses {
+			if k := member(obj, nil); k != "" {
+				uses[k] = true
+			}
+		}
+		for _, sel := range info.Selections {
+			if k := member(sel.Obj(), sel.Recv()); k != "" {
+				uses[k] = true
+			}
+		}
+	}
+	if len(files) == 0 {
+		fail("no Go files in %s", strings.Join(os.Args[1:], " "))
+	}
+	json.NewEncoder(os.Stdout).Encode(map[string][]string{"uses": sorted(uses), "imports": sorted(imports), "files": sorted(files)})
+}
+
+// member names obj "<pkg>.<Name>" or "<pkg>.<Type>.<Member>" when it is an exported member of
+// a tracked package, else "". recv is the receiver type of a selection, when there is one.
+func member(obj types.Object, recv types.Type) string {
+	if obj == nil || obj.Pkg() == nil || !tracked[obj.Pkg().Path()] || !obj.Exported() {
+		return ""
+	}
+	short := strings.TrimPrefix(obj.Pkg().Path(), "github.com/KogenAI/kogen-coordinator/")
+	switch o := obj.(type) {
+	case *types.Func:
+		if sig, ok := o.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return short + "." + typeName(sig.Recv().Type()) + "." + o.Name()
+		}
+	case *types.Var:
+		if o.IsField() {
+			if recv != nil {
+				return short + "." + typeName(recv) + "." + o.Name()
+			}
+			// A field named in a composite literal: its struct is a type of the package.
+			scope := o.Pkg().Scope()
+			for _, n := range scope.Names() {
+				if tn, ok := scope.Lookup(n).(*types.TypeName); ok {
+					if st, ok := tn.Type().Underlying().(*types.Struct); ok {
+						for i := 0; i < st.NumFields(); i++ {
+							if st.Field(i) == o {
+								return short + "." + n + "." + o.Name()
+							}
+						}
+					}
+				}
+			}
+			return short + ".?." + o.Name()
+		}
+	}
+	if obj.Parent() != obj.Pkg().Scope() {
+		return ""
+	}
+	return short + "." + obj.Name()
+}
+
+func typeName(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if n, ok := t.(*types.Named); ok {
+		return n.Obj().Name()
+	}
+	return "?"
+}
+
+func sorted(m map[string]bool) []string {
+	s := make([]string, 0, len(m))
+	for k := range m {
+		s = append(s, k)
+	}
+	sort.Strings(s)
+	return s
+}

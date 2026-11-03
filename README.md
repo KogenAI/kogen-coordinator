@@ -9,6 +9,7 @@ It is a component of [Kogen](https://github.com/KogenAI/kogen), which pins an ex
 - `project`: what Kogen keeps about a project: `.kogen/project.yaml` (commands, checks, roles and models, protect patterns), Intents (`intent.md`, `acceptance.feature`, stages), the approval baseline and its hash, and Shape provenance receipts.
 - `git`: Kogen's window on Git: repository discovery, the target-repository commit, locks, execution pins, candidate trees, diffs and the index.
 - `durable`: the one place Kogen flushes a file to stable storage.
+- `contract`: the contract suite: what kogen-coordinator's consumers (kogen, kogen-executor, kogen-verification, kogen-shaping, kogen-build) use, pinned in tests that run in `go test ./...`: the exported API they call, the behaviours they rely on and the file and wire formats they read or write. An intended interface change edits it together with paired consumer items. See [contract/](contract/).
 
 ## Testing
 
