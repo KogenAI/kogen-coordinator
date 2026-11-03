@@ -1,0 +1,52 @@
+package main
+
+import (
+ "bytes"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "os"
+ "path/filepath"
+ "strings"
+ "time"
+ "github.com/KogenAI/kogen-coordinator/durable"
+)
+func must(err error) { if err != nil { panic(err) } }
+func main() {
+ base, err := os.MkdirTemp("", "run-state-"); must(err); defer os.RemoveAll(base)
+ workspace := filepath.Join(base,"workspace"); must(os.Mkdir(workspace,0700))
+ root := filepath.Join(base,"retained")
+ s, err := durable.OpenRunStore(root); must(err)
+ empty, err := s.List(); must(err)
+ _, err = s.Read("absent"); absent := errors.Is(err,os.ErrNotExist)
+ at := time.Date(2026,11,3,3,4,5,123,time.FixedZone("offset",7200))
+ for _, stage := range []string{"shape","baseline"} { must(s.Append("run-a",durable.RunEvent{Stage:stage,At:at})) }
+ must(s.Finish("run-a","pending","approval required",[]string{"attempts/approval-1"}))
+ for i:=0;i<32;i++ { must(s.Append("run-a",durable.RunEvent{Stage:fmt.Sprintf("build-%d",i),At:at,Attempt:fmt.Sprintf("attempts/build-%d",i)})) }
+ for _, stage := range []string{"approval","review","commit"} { must(s.Append("run-a",durable.RunEvent{Stage:stage,At:at})) }
+ must(s.Finish("run-a","success","committed",[]string{"attempts/approval-2","attempts/review"}))
+ must(s.Finish("run-b","stopped","no_progress",[]string{"attempts/no_progress"}))
+ recordPath := filepath.Join(root,"run-a.json")
+ before, err := os.ReadFile(recordPath); must(err)
+ err = s.Append("run-a",durable.RunEvent{Stage:strings.Repeat("x",70000),At:at})
+ after, readErr := os.ReadFile(recordPath); must(readErr)
+ oversized := err != nil && bytes.Equal(before,after)
+ err = s.Finish("run-a","failure",strings.Repeat("x",70000),nil)
+ after, readErr = os.ReadFile(recordPath); must(readErr); oversized = oversized && err != nil && bytes.Equal(before,after)
+ err = s.Append("../escaped",durable.RunEvent{Stage:"shape",At:at})
+ _, escapedErr := os.Stat(filepath.Join(base,"escaped.json"))
+ invalid := err != nil && os.IsNotExist(escapedErr)
+ must(os.RemoveAll(workspace))
+ s, err = durable.OpenRunStore(root); must(err)
+ ids, err := s.List(); must(err)
+ a, err := s.Read("run-a"); must(err)
+ b, err := s.Read("run-b"); must(err)
+ stages:=[]string{}; utc:=true
+ for _, e := range a.Events { stages=append(stages,e.Stage); utc=utc && e.At.Equal(at) && e.At.Format(time.RFC3339Nano)=="2026-11-03T01:04:05.000000123Z" }
+ var raw struct { Version int `json:"version"`; Events []struct{ At string `json:"at"` } `json:"events"` }
+ must(json.Unmarshal(after,&raw)); utc=utc && raw.Version==1 && len(raw.Events)==32
+ for _,e:=range raw.Events { utc=utc && e.At=="2026-11-03T01:04:05.000000123Z" }
+ _, err = os.Stat(workspace)
+ out:=map[string]any{"empty":empty,"ids":ids,"stages":stages,"omitted":a.Omitted,"outcome":a.Outcome,"reason":a.Reason,"evidence":a.Evidence,"attempt":a.Events[0].Attempt,"utc":utc,"workspaceGone":os.IsNotExist(err),"otherOutcome":b.Outcome,"otherEvents":len(b.Events),"absent":absent,"oversizeUnchanged":oversized,"invalidUnchanged":invalid,"byteBound":len(after)<=65536}
+ must(json.NewEncoder(os.Stdout).Encode(out))
+}
