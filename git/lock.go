@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"kogen-loop/sys"
 )
@@ -48,7 +50,7 @@ const lockHeader = "kogen-build-lock 1"
 //	token <token>
 //
 // Locks left by earlier Kogen versions (a directory holding an owner file, or a plain pid
-// file) carry no kernel lock: they are held while their pid runs and removed otherwise.
+// file) carry no kernel lock: they are held only while their recorded owner is plausible.
 type Lock struct {
 	Path string
 
@@ -86,7 +88,14 @@ func (l *Lock) Acquire() (LockResult, error) {
 		res = LockResult{Status: RemovedStale, PID: pid}
 	}
 	for attempt := 0; attempt < 100; attempt++ {
-		f, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE, 0o644)
+		f, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		created := err == nil
+		if errors.Is(err, os.ErrExist) {
+			f, err = os.OpenFile(l.Path, os.O_RDWR, 0o644)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+		}
 		if err != nil {
 			return LockResult{}, err
 		}
@@ -105,8 +114,9 @@ func (l *Lock) Acquire() (LockResult, error) {
 			continue
 		}
 		content, _ := readLock(f)
-		if pid, legacy := legacyPID(content); legacy && pid != "" {
-			if l.isAlive(pid) && pid != strconv.Itoa(os.Getpid()) {
+		if pid, legacy := legacyPID(content); legacy && !created {
+			st, _ := f.Stat()
+			if st != nil && l.legacyHeld(pid, st.ModTime()) {
 				f.Close()
 				return LockResult{Status: Held, PID: pid}, nil
 			}
@@ -152,8 +162,9 @@ func (l *Lock) Held() (bool, error) {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	content, _ := readLock(f)
-	if pid, legacy := legacyPID(content); legacy && pid != "" {
-		return l.isAlive(pid), nil
+	if pid, legacy := legacyPID(content); legacy {
+		st, err := f.Stat()
+		return err == nil && l.legacyHeld(pid, st.ModTime()), nil
 	}
 	return false, nil
 }
@@ -178,6 +189,10 @@ func (l *Lock) Release() {
 // absent or written by an earlier Kogen) and whether a running process holds it.
 func LockOwner(path string) (pid, token string, held bool) {
 	held, _ = NewLock(path).Held()
+	if st, err := os.Lstat(path); err == nil && st.IsDir() {
+		pid, _, _ = NewLock(path).legacyDirectory(false)
+		return pid, "", held
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", "", held
@@ -209,7 +224,7 @@ func (l *Lock) legacyDirectory(remove bool) (pid string, alive bool, err error) 
 		owner := filepath.Join(l.Path, entries[0].Name())
 		b, _ := os.ReadFile(owner)
 		pid = strings.TrimSpace(string(b))
-		if l.isAlive(pid) {
+		if st, err := os.Stat(owner); err == nil && l.legacyHeld(pid, st.ModTime()) {
 			return pid, true, nil
 		}
 		if !remove {
@@ -234,7 +249,7 @@ func readLock(f *os.File) (string, error) {
 
 // legacyPID returns the pid of a plain pid-file lock; legacy is false for this Kogen's format.
 func legacyPID(content string) (pid string, legacy bool) {
-	if content == "" || strings.HasPrefix(content, lockHeader+"\n") {
+	if strings.HasPrefix(content, lockHeader+"\n") {
 		return "", false
 	}
 	return strings.TrimSpace(content), true
@@ -275,6 +290,34 @@ func (l *Lock) isAlive(pid string) bool {
 		return l.alive(n)
 	}
 	return processAlive(n)
+}
+
+// legacyHeld requires both liveness and same-user process metadata consistent with
+// the legacy file. A failed or incomplete ps observation cannot prove ownership.
+func (l *Lock) legacyHeld(pid string, mtime time.Time) bool {
+	if !l.isAlive(pid) {
+		return false
+	}
+	cmd := exec.Command("ps", "-p", pid, "-o", "uid=", "-o", "comm=", "-o", "lstart=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) < 7 {
+		return false
+	}
+	uid, err := strconv.Atoi(fields[0])
+	if err != nil || uid != os.Geteuid() {
+		return false
+	}
+	exe, err := os.Executable()
+	if err == nil && filepath.Base(strings.Join(fields[1:len(fields)-5], " ")) == filepath.Base(exe) {
+		return true
+	}
+	started, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(fields[len(fields)-5:], " "), time.Local)
+	return err == nil && !started.After(mtime)
 }
 
 // processAlive is `kill -0`: the process exists (even one we may not signal).

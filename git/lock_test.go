@@ -2,6 +2,10 @@ package git
 
 import (
 	"bytes"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,7 +164,16 @@ func TestAcquireBuildMessages(t *testing.T) {
 	root := t.TempDir()
 	path := BuildLockPath(root)
 	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, []byte("987654321\n"), 0o644)
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	os.WriteFile(path, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o644)
+	old := time.Unix(1, 0)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
 	var out bytes.Buffer
 	s := sys.NewWith(nil, root)
 	s.Stderr = &out
@@ -226,5 +239,173 @@ func TestProcessAliveIsKillZero(t *testing.T) {
 	}
 	if strings.TrimSpace("x") == "" {
 		t.Fatal()
+	}
+}
+
+func TestLegacyOwnershipMetadata(t *testing.T) {
+	stamp := time.Date(2020, 1, 2, 3, 4, 5, 0, time.Local)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, comm, pid string
+		uid             int
+		start           time.Time
+		alive, held     bool
+	}{
+		{"after", "unrelated", "424242", os.Geteuid(), stamp.Add(time.Second), true, false},
+		{"same-name", filepath.Base(exe), "424242", os.Geteuid(), stamp.Add(time.Second), true, true},
+		{"before", "unrelated", "424242", os.Geteuid(), stamp.Add(-time.Second), true, true},
+		{"equal", "unrelated", "424242", os.Geteuid(), stamp, true, true},
+		{"foreign", "unrelated", "424242", os.Geteuid() + 1, stamp.Add(-time.Second), true, false},
+		{"dead", "unrelated", "424242", os.Geteuid(), stamp, false, false},
+		{"empty", "unrelated", "", os.Geteuid(), stamp, true, false},
+		{"text", "unrelated", "not-a-pid", os.Geteuid(), stamp, true, false},
+		{"zero", "unrelated", "0", os.Geteuid(), stamp, true, false},
+	} {
+		for _, dir := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dir=%v", c.name, dir), func(t *testing.T) {
+				path := lockPath(t)
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				owner := path
+				if dir {
+					if err := os.Mkdir(path, 0755); err != nil {
+						t.Fatal(err)
+					}
+					owner = filepath.Join(path, "owner")
+				}
+				if err := os.WriteFile(owner, []byte(c.pid), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(owner, stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+				bin := t.TempDir()
+				script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%d %s %s'\n", c.uid, c.comm, c.start.Format("Mon Jan _2 15:04:05 2006"))
+				if err := os.WriteFile(filepath.Join(bin, "ps"), []byte(script), 0755); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+				l := NewLock(path)
+				l.alive = func(int) bool { return c.alive }
+				held, err := l.Held()
+				if err != nil || held != c.held {
+					t.Fatalf("Held = %v, %v", held, err)
+				}
+				res, err := l.Acquire()
+				defer l.Release()
+				want := RemovedStale
+				if c.held {
+					want = Held
+				}
+				if err != nil || res.Status != want || res.PID != c.pid {
+					t.Fatalf("Acquire = %+v, %v", res, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyOwnerDiagnosticsAndOwnerMtime(t *testing.T) {
+	for _, dir := range []bool{false, true} {
+		t.Run(fmt.Sprint(dir), func(t *testing.T) {
+			path := lockPath(t)
+			os.MkdirAll(filepath.Dir(path), 0755)
+			owner := path
+			if dir {
+				os.Mkdir(path, 0755)
+				owner = filepath.Join(path, "owner")
+			}
+			pid := strconv.Itoa(os.Getpid())
+			os.WriteFile(owner, []byte(pid), 0644)
+			if dir {
+				old := time.Unix(1, 0)
+				os.Chtimes(path, old, old)
+			}
+			p, token, held := LockOwner(path)
+			if p != pid || token != "" || !held {
+				t.Fatalf("LockOwner = %q %q %v", p, token, held)
+			}
+			l := NewLock(path)
+			res, err := l.Acquire()
+			if err != nil || res.Status != Held || res.PID != pid {
+				t.Fatalf("Acquire = %+v, %v", res, err)
+			}
+		})
+	}
+}
+
+func TestLockSourceOnlySignalsZero(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "lock.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel.Name == "Signal" {
+			t.Error("Signal call in lock.go")
+		}
+		if sel.Sel.Name == "Kill" {
+			if len(call.Args) != 2 {
+				t.Error("Kill without signal zero")
+			} else if lit, ok := call.Args[1].(*ast.BasicLit); !ok || lit.Kind != token.INT || lit.Value != "0" {
+				t.Error("Kill with nonzero signal")
+			}
+		}
+		return true
+	})
+}
+
+func TestLegacyDirectoryOwnerMtimeStale(t *testing.T) {
+	path := lockPath(t)
+	os.MkdirAll(path, 0755)
+	owner := filepath.Join(path, "owner")
+	pid := strconv.Itoa(os.Getpid())
+	os.WriteFile(owner, []byte(pid), 0644)
+	old := time.Unix(1, 0)
+	os.Chtimes(owner, old, old)
+	bin := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\n' '%d unrelated Mon Jan  2 03:04:05 2020'\n", os.Geteuid())
+	os.WriteFile(filepath.Join(bin, "ps"), []byte(script), 0755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	future := time.Date(2021, 1, 1, 0, 0, 0, 0, time.Local)
+	os.Chtimes(path, future, future)
+	p, token, held := LockOwner(path)
+	if p != pid || token != "" || held {
+		t.Fatalf("LockOwner = %q %q %v", p, token, held)
+	}
+	if _, err := os.Stat(owner); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyMissingMetadataIsStale(t *testing.T) {
+	path := lockPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	l := NewLock(path)
+	held, err := l.Held()
+	if err != nil || held {
+		t.Fatalf("Held = %v, %v", held, err)
+	}
+	res, err := l.Acquire()
+	defer l.Release()
+	if err != nil || res.Status != RemovedStale {
+		t.Fatalf("Acquire = %+v, %v", res, err)
 	}
 }
