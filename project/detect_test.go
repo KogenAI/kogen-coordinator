@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -206,5 +207,33 @@ func TestAcceptanceCommand(t *testing.T) {
 	bridge := `NODE_PATH="$KOGEN_CUCUMBER" "$KOGEN_NODE" "$KOGEN_CUCUMBER/@cucumber/cucumber/bin/cucumber.js" --strict --require 'features/steps/*.js' --format "message:$KOGEN_ACCEPTANCE_REPORT" "$KOGEN_ACCEPTANCE_FEATURES"`
 	if got := AcceptanceCommand("features/steps", KogenRunner); got != bridge {
 		t.Errorf("bridge: %s", got)
+	}
+}
+
+func TestDetectBundler(t *testing.T) {
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"rails", map[string]string{"Gemfile": "source 'https://rubygems.org'", "Gemfile.lock": "GEM", "bin/rails": "ruby"}, []string{"Gemfile", "Gemfile.lock", "bin/rails"}, Detected{Setup: []string{"bundle install"}, Checks: []Check{{"test", "bin/rails test"}}}},
+		{"no rails", map[string]string{"Gemfile": ""}, []string{"Gemfile", "Gemfile.lock"}, Detected{Setup: []string{"bundle install"}}},
+		{"untracked rails", map[string]string{"Gemfile": "", "bin/rails": ""}, []string{"Gemfile", "Gemfile.lock"}, Detected{Setup: []string{"bundle install"}}},
+		{"missing lock", map[string]string{"Gemfile": ""}, []string{"Gemfile", "bin/rails"}, Detected{}},
+		{"untracked lock", map[string]string{"Gemfile": "", "Gemfile.lock": ""}, []string{"Gemfile", "bin/rails"}, Detected{}},
+		{"untracked gemfile", map[string]string{"Gemfile": "", "Gemfile.lock": ""}, []string{"Gemfile.lock", "bin/rails"}, Detected{}},
+		{"missing gemfile text", nil, []string{"Gemfile", "Gemfile.lock", "bin/rails"}, Detected{}},
+		{"mix", map[string]string{"mix.exs": "", "Gemfile": ""}, []string{"mix.exs", "Gemfile", "Gemfile.lock", "bin/rails"}, Detected{Setup: []string{"mix deps.get", "bundle install"}, Checks: []Check{{"compile", "mix compile --warnings-as-errors"}, {"test", "mix test"}, {"bundler-test", "bin/rails test"}}}},
+		{"npm", map[string]string{"package.json": `{"scripts":{"test":"jest"}}`, "Gemfile": ""}, []string{"package.json", "package-lock.json", "Gemfile", "Gemfile.lock", "bin/rails"}, Detected{Setup: []string{npmCI, "bundle install"}, Checks: []Check{{"test", "npm run test"}, {"bundler-test", "bin/rails test"}}}},
+		{"go", map[string]string{"go.mod": "module x", "Gemfile": ""}, []string{"go.mod", "Gemfile", "Gemfile.lock", "bin/rails"}, Detected{Setup: []string{"go mod download", "bundle install"}, Checks: []Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}, {"test", "bin/rails test"}}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
 	}
 }

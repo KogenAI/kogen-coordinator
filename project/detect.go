@@ -34,6 +34,7 @@ func Detect(files map[string]string, tracked []string) Detected {
 		detectNpm(&d, pkg, tracked)
 	}
 	detectGo(&d, files, tracked)
+	detectBundler(&d, files, tracked)
 	return d
 }
 
@@ -135,6 +136,20 @@ func detectGo(d *Detected, files map[string]string, tracked []string) {
 			Check{prefix + "-vet", command("go vet ./...")},
 			Check{prefix + "-build", command("go build -o /dev/null ./...")},
 		)
+	}
+}
+
+func detectBundler(d *Detected, files map[string]string, tracked []string) {
+	if _, ok := files["Gemfile"]; !ok || !slices.Contains(tracked, "Gemfile") || !slices.Contains(tracked, "Gemfile.lock") {
+		return
+	}
+	d.Setup = append(d.Setup, "bundle install")
+	if slices.Contains(tracked, "bin/rails") {
+		name := "test"
+		if slices.ContainsFunc(d.Checks, func(c Check) bool { return c.Name == name }) {
+			name = "bundler-test"
+		}
+		d.Checks = append(d.Checks, Check{name, "bin/rails test"})
 	}
 }
 
