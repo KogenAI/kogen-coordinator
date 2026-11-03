@@ -12,6 +12,24 @@ It is a component of [Kogen](https://github.com/KogenAI/kogen), which pins an ex
 - `route`: the outer routing of a Build's candidate through its phases (verify, independent review with its repairs, the implementer's repair of a red candidate, commit) and the resume of a Build stopped at one of those steps. The phases are reached through narrow interfaces (`route.Steps`); each keeps its own policies and state.
 - `contract`: the contract suite: what kogen-coordinator's consumers (kogen, kogen-executor, kogen-verification, kogen-shaping, kogen-review, kogen-build) use, pinned in tests that run in `go test ./...`: the exported API they call, the behaviours they rely on and the file and wire formats they read or write. An intended interface change edits it together with paired consumer items. See [contract/](contract/).
 
+## Opt-in model lineup API
+
+Existing configuration APIs and consumers continue to use the models in `.kogen/project.yaml`.
+Consumers may explicitly call `project.LoadModels(root)` to read the required team lineup at
+`project.ModelsPath` (`.kogen/models.yaml`) and the optional machine override at
+`project.LocalModelsPath` (`.kogen/local/models.yaml`). Both files contain only a root `models:`
+mapping of shape, build and review roles using the existing role validation. Missing team roles
+use `project.DefaultModels()`; a local role replaces the entire team role. The returned
+`ModelLineup.Roles` holds the effective selections and `Sources` names the repository-relative
+source of each role, including defaults. Invalid files report configuration errors with file and
+line diagnostics; neither file is written by the loader. `project.ModelsTemplate()` returns a
+team file with the defaults in `ModelRoles` order.
+
+The approval baseline includes the team path immediately after the project configuration, even
+when the team file is absent. The local path is not automatically protected; explicit `protect`
+patterns continue to apply. Thus local-only changes do not affect the ordinary approval hash,
+while adding or changing the team file does.
+
 ## Getting started
 
 Install Go 1.27.2 or newer, as required by `go.mod`. Clone the public repository and enter it:

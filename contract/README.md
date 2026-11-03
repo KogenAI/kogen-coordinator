@@ -34,6 +34,7 @@ They all resolve kogen-coordinator at `c4a49a4`, whose exported production code 
 
 Each item is asserted so that changing it fails the suite.
 
+- `models-lineup`, `TestModelsLineup` and `TestModelsValidation`: the opt-in team and local paths, defaults, whole-role overrides, source paths, file immutability and role validation. Legacy configuration remains independent of these files.
 - `config-path`, `TestConfigPathAndLoad`: `project.ConfigPath` is `.kogen/project.yaml` and `LoadConfig` reads the file written there.
 - `config-invalid-lines`, `TestConfigInvalidNamesTheLines`: an invalid file is `environment/project_config_invalid` (exit 3) with one `line N: ...` line per problem.
 - `config-not-initialized`, `TestConfigNotInitialized`: a root without the file is `environment/not_initialized` (exit 3).

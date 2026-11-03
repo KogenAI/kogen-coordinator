@@ -159,19 +159,23 @@ func ParseConfig(text, file string) (*Config, error) {
 		cfg, problems = validateConfig(node)
 	}
 	if len(problems) > 0 {
-		sort.SliceStable(problems, func(i, j int) bool {
-			if problems[i].line != problems[j].line {
-				return problems[i].line < problems[j].line
-			}
-			return problems[i].msg < problems[j].msg
-		})
-		e := sys.Fail("environment", "project_config_invalid", file, 3)
-		for _, p := range problems {
-			e.Lines = append(e.Lines, fmt.Sprintf("line %d: %s", p.line, p.msg))
-		}
-		return nil, e
+		return nil, configProblems(file, problems)
 	}
 	return cfg, nil
+}
+
+func configProblems(file string, problems []problem) error {
+	sort.SliceStable(problems, func(i, j int) bool {
+		if problems[i].line != problems[j].line {
+			return problems[i].line < problems[j].line
+		}
+		return problems[i].msg < problems[j].msg
+	})
+	e := sys.Fail("environment", "project_config_invalid", file, 3)
+	for _, p := range problems {
+		e.Lines = append(e.Lines, fmt.Sprintf("line %d: %s", p.line, p.msg))
+	}
+	return e
 }
 
 type validator struct{ problems []problem }

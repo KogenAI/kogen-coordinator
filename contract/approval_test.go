@@ -136,11 +136,11 @@ func TestBaselineOrderAndProtectGlobs(t *testing.T) {
 		".kogen/intents/fixture/intent.md", ".kogen/intents/fixture/acceptance.feature",
 		"features/steps/zz_steps.js", "features/steps/aa_steps.js",
 		".kogen/intents/fixture/b.txt", ".kogen/intents/fixture/notes.md",
-		".kogen/project.yaml",
+		".kogen/project.yaml", ".kogen/models.yaml",
 		"a/b/x.cfg", "cfg/one", "cfg/two/deep", "x.cfg",
 	})
-	if !slices.IsSorted(got[7:]) {
-		t.Fatalf("protect matches are not sorted: %q", got[7:])
+	if !slices.IsSorted(got[8:]) {
+		t.Fatalf("protect matches are not sorted: %q", got[8:])
 	}
 }
 

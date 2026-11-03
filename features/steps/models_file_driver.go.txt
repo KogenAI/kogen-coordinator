@@ -1,0 +1,42 @@
+package main
+
+import (
+ "encoding/json"
+ "fmt"
+ "os"
+ "path/filepath"
+ "strings"
+ "github.com/KogenAI/kogen-coordinator/project"
+)
+
+func main() {
+ root, mode := os.Args[1], os.Args[2]
+ switch mode {
+ case "template":
+  fmt.Print(project.ModelsTemplate())
+ case "legacy":
+  c, err := project.LoadConfig(root); if err != nil { panic(err) }
+  fmt.Println(c.Models["build"].Model)
+ case "baseline":
+  c, err := project.LoadConfig(root); if err != nil { panic(err) }
+  paths, err := project.Baseline(root, "fixture", c); if err != nil { panic(err) }
+  before := project.Hash(root, paths)
+  local := filepath.Join(root, project.LocalModelsPath)
+  if err := os.WriteFile(local, []byte("models:\n  build: {model: changed, effort: low}\n"), 0600); err != nil { panic(err) }
+  afterLocal := project.Hash(root, paths)
+  team := filepath.Join(root, project.ModelsPath)
+  b, err := os.ReadFile(team); if err != nil { panic(err) }
+  if err := os.WriteFile(team, append(b, '\n'), 0600); err != nil { panic(err) }
+  out := struct { Paths []string; LocalStable, TeamChanged bool }{paths, before == afterLocal, before != project.Hash(root, paths)}
+  if err := json.NewEncoder(os.Stdout).Encode(out); err != nil { panic(err) }
+ default:
+  l, err := project.LoadModels(root)
+  if err != nil { fmt.Print(err); return }
+  var rows []string
+  for _, name := range project.ModelRoles {
+   r := l.Roles[name]
+   rows = append(rows, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s", name, r.Provider, r.Executor, r.Model, r.Effort, r.BaseURL, r.MaxRounds, l.Sources[name]))
+  }
+  fmt.Print(strings.Join(rows, "\n"))
+ }
+}

@@ -18,7 +18,7 @@ import (
 
 // Baseline is the acceptance baseline (VER-1, AUT-2) in card order: the Intent's `intent.md` and
 // `acceptance.feature`, its acceptance list, the rest of its files, the project configuration and
-// the files `protect` matches, each once.
+// the team model lineup, and the files `protect` matches, each once.
 func Baseline(root, slug string, cfg *Config) ([]string, error) {
 	var intentFiles []string
 	dir := filepath.Join(root, IntentDir(slug))
@@ -66,7 +66,9 @@ func Baseline(root, slug string, cfg *Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return uniqStrings(append(all, protected...)), nil
+	all = uniqStrings(append(all, protected...))
+	all = slices.DeleteFunc(all, func(p string) bool { return p == ModelsPath })
+	return slices.Insert(all, slices.Index(all, ConfigPath)+1, ModelsPath), nil
 }
 
 // Protected lists the files matching `protect` (paths, folders or globs) among the tracked and the

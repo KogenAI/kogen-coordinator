@@ -587,7 +587,7 @@ func TestBaselineOrderAndDuplicates(t *testing.T) {
 	want := []string{
 		IntentMDPath(slug), FeaturePath(slug), "features/steps/z.js", "features/steps/a.js", ModelPath(slug),
 		IntentDir(slug) + "/.hidden", IntentDir(slug) + "/notes/b.txt",
-		ConfigPath, "lint.cfg",
+		ConfigPath, ModelsPath, "lint.cfg",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("baseline\n got %q\nwant %q", got, want)
@@ -597,7 +597,7 @@ func TestBaselineOrderAndDuplicates(t *testing.T) {
 func TestBaselineWithoutIntentFiles(t *testing.T) {
 	root := gitRepo(t)
 	got, err := Baseline(root, "nothing", &Config{})
-	if err != nil || !slices.Equal(got, []string{ConfigPath}) {
+	if err != nil || !slices.Equal(got, []string{ConfigPath, ModelsPath}) {
 		t.Errorf("got %v %v", got, err)
 	}
 }
