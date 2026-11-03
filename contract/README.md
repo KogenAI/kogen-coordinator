@@ -1,6 +1,6 @@
 # Contract suite
 
-This package is the contract of kogen-coordinator with its consumers: kogen, kogen-executor, kogen-verification, kogen-shaping and kogen-build. It pins exactly what they use: the exported API they call, the behaviours they rely on, and the file and wire formats they read or write. It runs in kogen-coordinator's own fast gate, `go test ./...`, so an interface change fails here first, without the consumer repositories.
+This package is the contract of kogen-coordinator with its consumers: kogen, kogen-executor, kogen-verification, kogen-shaping, kogen-review and kogen-build. It pins exactly what they use: the exported API they call, the behaviours they rely on, and the file and wire formats they read or write. It runs in kogen-coordinator's own fast gate, `go test ./...`, so an interface change fails here first, without the consumer repositories.
 
 An intended interface change edits this contract together with paired consumer items.
 
@@ -14,7 +14,7 @@ go test -race -count=1 ./contract/...
 
 - The cases are copied and adapted from the consumers' existing tests that exercise kogen-coordinator. A case that has no consumer test is adapted from the consumer code that uses the member (for example `git.Materialized.Mutations` in kogen-verification `verify/run.go` and `git.UnsetPrefix` in kogen-shaping `shape/init.go`).
 - The fixtures are synthetic only: `t.TempDir()` roots, Git repositories and project files written by the test, and `sys.NewWith(env, dir)` sessions from `kogen-loop/sys`. Git runs with `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, no inherited `GIT_*` or `KOGEN_*` variable, a `HOME` of its own, the identity `Fixture <fixture@example.invalid>`, its own empty hooks folder (`core.hooksPath`) and `commit.gpgsign false`, as `git/helper_test.go` does. `TestMain` sets this up for the whole process, because the project functions run Git with the process environment.
-- The suite imports only the standard library, `project`, `git` and `durable` of kogen-coordinator and `kogen-loop/sys`. It does not read kogen-coordinator's own sources or goldens, runs no model, uses no network, no fixed port and no shared path, has no `t.Skip`, no sleep and no build constraint, and passes with `-count=1`, `-trimpath` and `-race`.
+- The suite imports only the standard library, `project`, `git`, `durable` and `route` of kogen-coordinator and `kogen-loop/sys`. It does not read kogen-coordinator's own sources or goldens, runs no model, uses no network, no fixed port and no shared path, has no `t.Skip`, no sleep and no build constraint, and passes with `-count=1`, `-trimpath` and `-race`.
 
 ## Source commits
 
@@ -59,6 +59,7 @@ Each item is asserted so that changing it fails the suite.
 - `unset-prefix`, `TestUnsetPrefix`: the shell prefix that removes the location variables.
 - `not-a-git-repo` and `identity-missing`, `TestOpenAndIdentity`: the repository and identity errors.
 - `durable-skip`, `TestDurableSyncIsSkippedInTests`: `Sync` after `SkipSyncInTests`.
+- `route-cycle`, `route-resume` and `route-stages`, `TestRouteCycleAndResume`: the verify → review → commit cycle (a red pass returns the repair feedback, a drifted approval verifies and reviews again), the resume of a failed commit (finished alone, never restarted), of a review-only checkpoint and of a review its reviewer cannot continue (a fresh review) or can (continued), and the persisted stage names. Derived from kogen-build's routing (`build/route.go`, `builder.go`), which this change moved here.
 
 ## Differences from consumer expectations
 
@@ -300,3 +301,4 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.Workers.Roles` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/batch.go`, `kogen-build/build/legacy_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.WriteApproval` | kogen, kogen-build | `kogen/cli/buildprogram/helper_test.go` | `TestApprovalPathAndJSON`, `TestApprovalOfTheBaselineHash` |
 | `project.WritePackageFacts` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/approve.go`, `kogen-build/build/facts.go` | `TestWritePackageFacts` |
+| `route.Steps`, `route.Cycle`, `route.Resume`, `route.Stage*` | kogen-build, kogen-review (the review stages) | `kogen-build/build/route.go`, `kogen-build/build/builder.go`, `kogen-review/review/independent.go` | `TestRouteCycleAndResume` |
