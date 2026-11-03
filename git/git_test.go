@@ -174,8 +174,8 @@ func TestTrackedUnignoredIgnored(t *testing.T) {
 	f.git(t, "add", "-f", "build/out.txt")
 	sameSet(t, "tracked", must(f.Tracked()), []string{"README.md", "build/out.txt"})
 	sameSet(t, "unignored", must(f.Unignored()), []string{"README.md", "build/out.txt", ".gitignore", "new file.txt", "tracked ignored.txt"})
-	sameSet(t, "ignored", f.Ignored("build/out.txt", "new file.txt", "build/other.txt"), []string{"build/out.txt", "build/other.txt"})
-	if got := f.Ignored(); got != nil {
+	sameSet(t, "ignored", must(f.Ignored("build/out.txt", "new file.txt", "build/other.txt")), []string{"build/out.txt", "build/other.txt"})
+	if got := must(f.Ignored()); got != nil {
 		t.Fatalf("Ignored() = %q", got)
 	}
 }
@@ -422,5 +422,26 @@ func TestCanCommit(t *testing.T) {
 	}
 	if !bare(append(author, committer...)...).CanCommit() {
 		t.Fatal("environment identity refused")
+	}
+}
+
+func TestIgnoredByteExactAndFailures(t *testing.T) {
+	f := newFixture(t)
+	f.write(t, ".gitignore", "*.skip\n")
+	ignored := []string{"café.skip", "space name.skip", "a\"quote.skip", "back\\slash.skip", "new\nline.skip", "tab\tname.skip"}
+	paths := append(append([]string{}, ignored...), "clean.txt")
+	if got := must(f.Ignored(paths...)); !slices.Equal(got, ignored) {
+		t.Fatalf("Ignored = %q, want %q", got, ignored)
+	}
+	if got := must(f.Ignored("clean.txt")); len(got) != 0 {
+		t.Fatalf("Ignored clean = %q", got)
+	}
+	outside := New(t.TempDir(), testEnv())
+	if got, err := outside.Ignored("clean.txt"); err == nil {
+		t.Fatalf("outside repository: %q, %v", got, err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got, err := New(f.Dir, nil).Ignored("clean.txt"); err == nil {
+		t.Fatalf("unavailable Git: %q, %v", got, err)
 	}
 }

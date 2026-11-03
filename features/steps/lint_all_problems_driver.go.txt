@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/KogenAI/kogen-coordinator/project"
 	"kogen-loop/sys"
 )
 
 // Reads {"intent": ..., "feature": ...} on stdin, checks them as the Intent `demo` laid over an
-// empty temporary root, and prints {"exit": n, "render": "..."} (exit 0 and render "" when accepted).
+// temporary Git repository, and prints {"exit": n, "render": "..."} (exit 0 and render "" when accepted).
 func main() {
 	var in struct{ Intent, Feature string }
 	if err := json.NewDecoder(os.Stdin).Decode(&in); err != nil {
@@ -21,6 +22,10 @@ func main() {
 		panic(err)
 	}
 	defer os.RemoveAll(root)
+	cmd := exec.Command("git", "init", "-q", root)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		panic(fmt.Sprintf("git init: %v: %s", err, output))
+	}
 	overlay := map[string][]byte{project.IntentMDPath("demo"): []byte(in.Intent), project.FeaturePath("demo"): []byte(in.Feature)}
 	out := map[string]any{"exit": 0, "render": ""}
 	if _, _, err := project.CheckIntent(root, "demo", overlay); err != nil {

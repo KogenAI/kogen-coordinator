@@ -436,21 +436,23 @@ func (r *Repo) Unignored() ([]string, error) {
 
 // Ignored returns those of paths that Git ignores, by the ignore rules alone (also for
 // tracked files).
-func (r *Repo) Ignored(paths ...string) []string {
+func (r *Repo) Ignored(paths ...string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil
+		return nil, nil
 	}
-	res, err := r.exec(r.Dir, nil, nil, nil, append([]string{"check-ignore", "--no-index", "--"}, paths...)...)
-	if err != nil || res.Status != 0 {
-		return nil
+	args := []string{"check-ignore", "--no-index", "-z", "--stdin"}
+	res, err := r.exec(r.Dir, nil, strings.NewReader(strings.Join(paths, "\x00")+"\x00"), nil, args...)
+	if err != nil {
+		return nil, err
 	}
-	var out []string
-	for _, l := range strings.Split(res.Stdout, "\n") {
-		if l != "" {
-			out = append(out, l)
-		}
+	if res.Status == 1 {
+		return nil, nil
 	}
-	return out
+	if res.Status != 0 {
+		_, err = okResult(res, nil, args)
+		return nil, err
+	}
+	return splitNUL(res.Stdout), nil
 }
 
 // Show is the content of path in rev; false when there is none.

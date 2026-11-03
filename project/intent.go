@@ -3,13 +3,13 @@ package project
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
 
+	repogit "github.com/KogenAI/kogen-coordinator/git"
 	"kogen-loop/sys"
 )
 
@@ -285,7 +285,14 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 
 	feature := FeaturePath(i.Slug)
 	if len(i.Acceptance) > 0 && i.Acceptance[0] == feature {
-		ignored := gitIgnored(i.Root, i.Acceptance)
+		ignoredPaths, err := repogit.New(i.Root, nil).Ignored(i.Acceptance...)
+		if err != nil {
+			add("acceptance: Git ignore check could not run")
+		}
+		ignored := make(map[string]bool, len(ignoredPaths))
+		for _, p := range ignoredPaths {
+			ignored[p] = true
+		}
 		for _, p := range i.Acceptance {
 			_, inOverlay := i.Overlay[p]
 			switch {
@@ -365,24 +372,6 @@ func uniqStrings(ss []string) []string {
 		}
 	}
 	return out
-}
-
-// gitIgnored asks Git which of paths are ignored, whether or not they are tracked
-// (`git check-ignore --no-index`). Any Git failure means none.
-func gitIgnored(root string, paths []string) map[string]bool {
-	cmd := exec.Command("git", append([]string{"check-ignore", "--no-index", "--"}, paths...)...)
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	ignored := map[string]bool{}
-	for _, l := range strings.Split(string(out), "\n") {
-		if l != "" {
-			ignored[l] = true
-		}
-	}
-	return ignored
 }
 
 // graphemeLen counts user-perceived characters: a base character with its combining marks, a

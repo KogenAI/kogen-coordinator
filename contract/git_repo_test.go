@@ -160,3 +160,19 @@ func TestUnsetPrefix(t *testing.T) {
 	env := git.CleanEnv([]string{"PATH=/bin", "GIT_DIR=/x", "GIT_INDEX_FILE=/y", "GIT_AUTHOR_NAME=a"})
 	equalList(t, "CleanEnv", env, []string{"PATH=/bin", "GIT_AUTHOR_NAME=a"})
 }
+
+// Ignored exposes both exact path bytes and errors to coordinator consumers.
+func TestIgnoredContract(t *testing.T) {
+	f := newRepoFx(t)
+	f.write(t, ".gitignore", "*.skip\n")
+	var paths []string
+	var err error
+	paths, err = f.Ignored("café\".skip", "clean.txt")
+	if err != nil || !slices.Equal(paths, []string{"café\".skip"}) {
+		t.Fatalf("Ignored: %q, %v", paths, err)
+	}
+	paths, err = git.New(t.TempDir(), f.Env).Ignored("clean.txt")
+	if err == nil {
+		t.Fatalf("Ignored outside repository: %q, %v", paths, err)
+	}
+}

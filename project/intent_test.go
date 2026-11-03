@@ -483,13 +483,14 @@ func TestCheckIntentReadsDiskAndOverlay(t *testing.T) {
 	}
 }
 
-func TestCheckIntentOutsideGitSkipsIgnoreCheck(t *testing.T) {
+func TestCheckIntentOutsideGitReportsIgnoreFailure(t *testing.T) {
 	gitSandbox(t)
 	root := t.TempDir()
 	writeFile(t, root, IntentMDPath(demoSlug), demoMD(demoParts{}))
 	writeFile(t, root, FeaturePath(demoSlug), goodFeature)
-	if _, _, err := CheckIntent(root, demoSlug, nil); err != nil {
-		t.Fatal(err)
+	_, _, err := CheckIntent(root, demoSlug, nil)
+	if got := problemsOf(t, err, "lint"); !slices.Equal(got, []string{"acceptance: Git ignore check could not run"}) {
+		t.Fatalf("problems %q", got)
 	}
 }
 
@@ -674,5 +675,38 @@ func TestGraphemeLen(t *testing.T) {
 		if got := graphemeLen(s); got != want {
 			t.Errorf("graphemeLen(%q) = %d, want %d", s, got, want)
 		}
+	}
+}
+
+func TestCheckIntentIgnoredPathsByteExact(t *testing.T) {
+	root := gitRepo(t)
+	writeFile(t, root, ".gitignore", "*.skip.js\n")
+	writeFile(t, root, FeaturePath(demoSlug), goodFeature)
+	for _, path := range []string{"café.skip.js", "with space.skip.js", "with\"quote.skip.js", "plain.skip.js", "café.js"} {
+		t.Run(path, func(t *testing.T) {
+			writeFile(t, root, path, "//")
+			writeFile(t, root, IntentMDPath(demoSlug), demoMD(demoParts{acc: sp("Acceptance:\n- " + FeaturePath(demoSlug) + "\n- " + path)}))
+			_, _, err := CheckIntent(root, demoSlug, nil)
+			if path == "café.js" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if got := problemsOf(t, err, "lint"); !slices.Equal(got, []string{"acceptance: " + path + " is ignored by Git"}) {
+				t.Fatalf("problems %q", got)
+			}
+		})
+	}
+}
+
+func TestCheckIntentUnavailableGit(t *testing.T) {
+	root := gitRepo(t)
+	writeFile(t, root, IntentMDPath(demoSlug), demoMD(demoParts{}))
+	writeFile(t, root, FeaturePath(demoSlug), goodFeature)
+	t.Setenv("PATH", t.TempDir())
+	_, _, err := CheckIntent(root, demoSlug, nil)
+	if got := problemsOf(t, err, "lint"); !slices.Equal(got, []string{"acceptance: Git ignore check could not run"}) {
+		t.Fatalf("problems %q", got)
 	}
 }
