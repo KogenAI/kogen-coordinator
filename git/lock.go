@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // BuildLockPath is the Build lock of the repository at root (AUT-4).

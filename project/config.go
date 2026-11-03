@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // ConfigPath is the project configuration, relative to the repository root.

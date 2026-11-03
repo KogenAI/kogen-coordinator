@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/KogenAI/kogen-coordinator/git"
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // lock-path, build-running and lock-diagnostics: kogen cli/facts.go and kogen-build build/facts.go

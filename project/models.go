@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // ModelsPath and LocalModelsPath identify the team lineup and optional machine override.

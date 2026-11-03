@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 func mustParse(t *testing.T, text string) *Config {

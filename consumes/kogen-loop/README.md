@@ -1,7 +1,6 @@
 # kogen-loop consumer contract
 
-This suite pins coordinator's reliance on `kogen-loop v0.0.0`, replaced by
-`github.com/KogenAI/kogen-loop v0.0.0-20261102055344-c6e2360290d4`.
+This suite pins coordinator's reliance on `github.com/KogenAI/kogen-loop v0.0.0-20261103215300-3e292bb34b90`.
 It tests the producer directly, using temporary roots and local subprocesses.
 Run `go test -race -count=1 -trimpath ./consumes/kogen-loop`; it also runs in
 `go test ./...`.
@@ -12,11 +11,11 @@ For this baseline, inspect all non-test Go files with
 `rg -n 'kogen-loop|sys\.' --glob '*.go' -g '!**/*_test.go'`, then inspect
 those files for selectors on values returned by the dependency and on session
 receivers (including `Lines`, `Status`, `Output`, `Run`, `Err`, and `Progress`).
-Use `go list -f '{{.Dir}}' kogen-loop/sys` and `go doc kogen-loop/sys` plus
+Use `go list -f '{{.Dir}}' github.com/KogenAI/kogen-loop/sys` and `go doc github.com/KogenAI/kogen-loop/sys` plus
 `go doc` on its exported types to inspect the pinned public definitions.
 Test-only imports are excluded; the comment naming `sys.Interrupted` in
 `git/commit.go` is not a production use. All current production imports of
-this dependency are `kogen-loop/sys`.
+this dependency are `github.com/KogenAI/kogen-loop/sys`.
 
 | Producer reliance | Coordinator production locations | Assertions |
 | --- | --- | --- |

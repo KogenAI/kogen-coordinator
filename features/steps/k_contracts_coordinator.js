@@ -17,7 +17,7 @@ const {spawn, spawnSync} = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const MODULE = 'github.com/KogenAI/kogen-coordinator';
-const ALLOWED = [MODULE + '/project', MODULE + '/git', MODULE + '/durable', 'kogen-loop/sys'];
+const ALLOWED = [MODULE + '/project', MODULE + '/git', MODULE + '/durable', 'github.com/KogenAI/kogen-loop/sys'];
 const HEADER = '| Interface | Consumers | Derived from | Contract tests |';
 const RULE = 'An intended interface change edits this contract together with paired consumer items.';
 const SLOW_SECONDS = 30;
@@ -161,7 +161,7 @@ function inventoryObservation(inventory, used, rows, tests) {
   return o;
 }
 // independence lists imports beyond the standard library (go/* excluded), the three
-// kogen-coordinator packages, kogen-loop/sys and the contract's own packages, and Go files with
+// kogen-coordinator packages, github.com/KogenAI/kogen-loop/sys and the contract's own packages, and Go files with
 // a string that starts with "..".
 function independence(imports, files) {
   const foreign = imports.filter(i => {
@@ -260,7 +260,7 @@ const CONTROLS = {
     async () => (await outcome(MESSAGE, ['./git'], MESSAGE_TEST)) === 'contract failed',
     () => inCopy(async t => { const u = await uses(t, ['./project']); return ['git.New', 'git.Repo.Tree', 'durable.Sync', 'project.Hash'].every(m => u.uses.includes(m)) && isDeepStrictEqual(independence(u.imports, {}), {foreign_imports:[], parent_paths:[]}); }),
     async () => inv(Object.keys(SAMPLE), SAMPLE_README, SAMPLE_TESTS),
-    async () => isDeepStrictEqual(independence(['testing', 'net/http/httptest', 'kogen-loop/sys', MODULE + '/git', MODULE + '/contract/internal/fixture'], {'contract/a_test.go':'p := filepath.Join(dir, "testdata", "x")'}), {foreign_imports:[], parent_paths:[]}),
+    async () => isDeepStrictEqual(independence(['testing', 'net/http/httptest', 'github.com/KogenAI/kogen-loop/sys', MODULE + '/git', MODULE + '/contract/internal/fixture'], {'contract/a_test.go':'p := filepath.Join(dir, "testdata", "x")'}), {foreign_imports:[], parent_paths:[]}),
   ],
   bad:[
     () => inCopy(async t => { fs.writeFileSync(path.join(t, MESSAGE.file), fs.readFileSync(path.join(t, MESSAGE.file), 'utf8').replace(MESSAGE.from, MESSAGE.to)); return isDeepStrictEqual(await suite(t, ['./git'], MESSAGE_TEST), GOOD_SUITE); }),
@@ -275,7 +275,7 @@ const CONTROLS = {
     async () => inv(Object.keys(SAMPLE), SAMPLE_README.split('\n').filter(l => !l.includes('`project.Hash`')).join('\n'), SAMPLE_TESTS),
     async () => inv(Object.keys(SAMPLE), SAMPLE_README.replace('| --- | --- | --- | --- |', '| --- | --- | --- | --- |\n| `git.Open` | kogen | `kogen/cli/engine.go` | `TestRepo` |'), SAMPLE_TESTS),
     async () => isDeepStrictEqual(independence(['testing', 'github.com/KogenAI/kogen-build/build'], {}), {foreign_imports:[], parent_paths:[]}),
-    async () => isDeepStrictEqual(independence(['testing', 'kogen-loop/provider'], {}), {foreign_imports:[], parent_paths:[]}),
+    async () => isDeepStrictEqual(independence(['testing', 'github.com/KogenAI/kogen-loop/provider'], {}), {foreign_imports:[], parent_paths:[]}),
     async () => isDeepStrictEqual(independence(['testing', 'go/parser'], {}), {foreign_imports:[], parent_paths:[]}),
     async () => isDeepStrictEqual(independence(['testing'], {'contract/a_test.go':'os.ReadFile("../project/testdata/golden.json")'}), {foreign_imports:[], parent_paths:[]}),
   ],

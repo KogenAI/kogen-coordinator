@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	repogit "github.com/KogenAI/kogen-coordinator/git"
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // Intent is `.kogen/intents/<slug>/intent.md` as read: `intent.md`, `acceptance.feature` and an

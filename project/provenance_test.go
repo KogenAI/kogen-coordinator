@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // provenanceFixture builds the repository testdata/facts-gen.exs built for the Elixir Kogen:

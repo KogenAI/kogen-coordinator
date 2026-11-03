@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"kogen-loop/sys"
+	"github.com/KogenAI/kogen-loop/sys"
 )
 
 // The helper process takes the lock, reports ready, and waits to be killed.

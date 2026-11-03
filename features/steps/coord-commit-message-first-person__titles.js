@@ -12,7 +12,7 @@ import (
  "path/filepath"
  "github.com/KogenAI/kogen-coordinator/project"
  repogit "github.com/KogenAI/kogen-coordinator/git"
- "kogen-loop/sys"
+ "github.com/KogenAI/kogen-loop/sys"
 )
 func main() {
  root, err := os.MkdirTemp("", "owner-title-"); if err != nil { panic(err) }; defer os.RemoveAll(root)

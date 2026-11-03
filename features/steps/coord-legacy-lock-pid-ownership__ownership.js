@@ -23,7 +23,7 @@ import (
  "strconv"
  "testing"
  "time"
- "kogen-loop/sys"
+ "github.com/KogenAI/kogen-loop/sys"
 )
 func TestOwnershipObservation(t *testing.T) {
  mode := os.Getenv("OWNERSHIP_CASE")
