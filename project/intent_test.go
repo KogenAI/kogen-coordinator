@@ -792,3 +792,65 @@ func TestCheckIntentAcceptanceSymlinksAndOverlay(t *testing.T) {
 		})
 	}
 }
+
+func TestTitleOwnerRules(t *testing.T) {
+	for _, tc := range []struct {
+		title, name      string
+		named, narration bool
+	}{
+		{"Pat Owner approved the retry change", "Pat Owner", true, true},
+		{"PAT OWNER adds retry", "Pat Owner", true, false},
+		{"Pat Ownerish adds retry", "Pat Owner", false, false},
+		{"The owner has approved retry", "", false, true},
+		{"Pat adds retry", "Pat Owner", false, false},
+		{"Pat Ownership adds retry", "Pat Owner", false, false},
+		{"Approved by the owner: add retry", "", false, true},
+		{"Owner authorized export retry", "", false, true},
+		{"The user approves export", "", false, true},
+		{"Add owner field to project", "Pat Owner", false, false},
+		{"Add retry to export", "Pat Owner", false, false},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			if got := titleNamesUser(tc.title, tc.name); got != tc.named {
+				t.Errorf("name match = %v", got)
+			}
+			if got := ownerAuthorizationRe.MatchString(tc.title); got != tc.narration {
+				t.Errorf("narration = %v", got)
+			}
+		})
+	}
+}
+
+func TestCheckIntentTargetGitUserTitles(t *testing.T) {
+	root := intentRoot(t)
+	cmd := exec.Command("git", "config", "user.name", "Pat Owner")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %s: %v", out, err)
+	}
+	for _, tc := range []struct {
+		title   string
+		refused bool
+	}{
+		{"Pat Owner approved the retry change", true},
+		{"Approved by the owner: add retry", true},
+		{"Owner authorized export retry", true},
+		{"Add owner field to project", false},
+		{"Add retry to export", false},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			overlay := map[string][]byte{IntentMDPath(demoSlug): []byte(demoMD(demoParts{title: sp("# " + tc.title)})), FeaturePath(demoSlug): []byte(goodFeature)}
+			_, _, err := CheckIntent(root, demoSlug, overlay)
+			if !tc.refused {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			lines := problemsOf(t, err, "lint")
+			if !strings.Contains(strings.Join(lines, "\n"), tc.title) {
+				t.Fatalf("missing title in problems: %v", lines)
+			}
+		})
+	}
+}

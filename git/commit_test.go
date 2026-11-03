@@ -414,3 +414,7 @@ func TestCommitMsgHookThatStagesIsUndoneByIndexRestore(t *testing.T) {
 		})
 	}
 }
+
+func TestCommitMessageRetryExact(t *testing.T) {
+	equal(t, "message", CommitMessage("Add retry to export", "demo"), "Add retry to export\n\nKogen-Intent: demo\n")
+}

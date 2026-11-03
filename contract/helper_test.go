@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	fixtureIdentity = "Fixture <fixture@example.invalid>"
+	fixtureIdentity = "Test User <fixture@example.invalid>"
 	fixtureSlug     = "fixture"
 )
 
@@ -50,7 +50,7 @@ func newBareFx(t *testing.T) *repoFx {
 	env := gitEnv()
 	f := &repoFx{Repo: git.New(root, env), Hooks: hooks, Env: env}
 	f.git(t, "init", "-q")
-	f.git(t, "config", "user.name", "Fixture")
+	f.git(t, "config", "user.name", "Test User")
 	f.git(t, "config", "user.email", "fixture@example.invalid")
 	f.git(t, "config", "core.hooksPath", hooks)
 	f.git(t, "config", "commit.gpgsign", "false")

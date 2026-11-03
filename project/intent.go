@@ -3,11 +3,13 @@ package project
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	repogit "github.com/KogenAI/kogen-coordinator/git"
 	"kogen-loop/sys"
@@ -244,6 +246,36 @@ var (
 	testLineRe = regexp.MustCompile(`^- (none: \S.*|.+: .+ \((unit|integration|scenario|regression|existing)\)\.?)$`)
 )
 
+// gitUserName reads the effective configuration in the target repository, independently of email.
+func gitUserName(root string) string {
+	cmd := exec.Command("git", "config", "--get", "user.name")
+	cmd.Dir = root
+	cmd.Env = repogit.CleanEnv(os.Environ())
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+var ownerAuthorizationRe = regexp.MustCompile(`(?i)\b(?:(?:the\s+)?(?:owner|user)\s+(?:(?:has|had)\s+)?(?:approves?|approved|authorizes?|authorized)|(?:approved|authorized)\s+by\s+(?:the\s+)?(?:owner|user))\b`)
+
+func titleNamesUser(title, name string) bool {
+	if name == "" {
+		return false
+	}
+	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(name))
+	for _, loc := range re.FindAllStringIndex(title, -1) {
+		before, _ := utf8.DecodeLastRuneInString(title[:loc[0]])
+		after, _ := utf8.DecodeRuneInString(title[loc[1]:])
+		word := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' || unicode.IsMark(r) }
+		if !word(before) && !word(after) {
+			return true
+		}
+	}
+	return false
+}
+
 // lintIntent lists every problem. With parsed false the feature did not parse, so the checks that
 // need its scenarios are skipped.
 func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
@@ -255,6 +287,12 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 	} else {
 		if n := graphemeLen(i.Title); n > 50 {
 			add(fmt.Sprintf("title: the title must be at most 50 characters, not %d", n))
+		}
+		if titleNamesUser(i.Title, gitUserName(i.Root)) {
+			add(fmt.Sprintf("title: %q names the Git user; use an owner-authored title instead", i.Title))
+		}
+		if ownerAuthorizationRe.MatchString(i.Title) {
+			add(fmt.Sprintf("title: %q narrates owner or user approval or authorization in the third person", i.Title))
 		}
 		if strings.HasSuffix(i.Title, ".") {
 			add("title: the title must not end with a period")
