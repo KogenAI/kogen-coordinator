@@ -12,8 +12,15 @@ import (
 	"kogen-loop/sys"
 )
 
-// golden.json holds the results of the Elixir Kogen for the inputs below, generated once by
-// testdata/golden-gen.exs. Every Go result must equal its Elixir result.
+// goldenFile is testdata/golden.json. It holds the inputs below (texts, files, overlays) and
+// their recorded results, originally produced by the Elixir Kogen and generated once by
+// testdata/golden-gen.exs. Every Go result must equal its recorded result.
+//
+// `go test ./... -update` records the current Go output only for the results that no longer
+// match; matching results and all inputs stay as recorded. Changing a recorded result is a
+// deliberate, reviewed change (`git diff -- project/testdata`), above all the main-Elixir
+// results that openModelSelection normalizes: they record what Elixir main produced.
+const goldenFile = "testdata/golden.json"
 
 type goldenError struct {
 	Class, Reason, Detail string
@@ -74,7 +81,7 @@ type golden struct {
 
 func loadGolden(t *testing.T) *golden {
 	t.Helper()
-	b, err := os.ReadFile("testdata/golden.json")
+	b, err := os.ReadFile(goldenFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,13 +200,39 @@ func openModelSelection(want *goldenError) (*goldenError, bool) {
 	return &c, false
 }
 
+// goldenErrorJSON is a sys.Error in the shape golden.json records errors.
+func goldenErrorJSON(se *sys.Error) map[string]any {
+	return map[string]any{"class": se.Class, "reason": se.Reason, "detail": se.Detail, "exit": se.Exit, "lines": list(se.Lines)}
+}
+
+// configResult is the result of a configuration case in the form golden.json records it; ok is
+// false when err is not an error the golden can record.
+func configResult(cfg *Config, err error) (result any, ok bool) {
+	if err == nil {
+		return map[string]any{"config": configJSON(cfg)}, true
+	}
+	se, ok := sys.AsError(err)
+	if !ok {
+		return nil, false
+	}
+	return map[string]any{"error": goldenErrorJSON(se)}, true
+}
+
 func TestConfigMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	if len(g.Config) < 100 {
 		t.Fatalf("golden has %d config cases", len(g.Config))
 	}
 	for i, c := range g.Config {
 		cfg, err := ParseConfig(c.Text, "/p/.kogen/project.yaml")
+		// drift reports a result that differs from the recorded one.
+		drift := func(format string, args ...any) {
+			if r, ok := configResult(cfg, err); ok && u.record(r, "config", i, "result") {
+				return
+			}
+			t.Errorf(format, args...)
+		}
 		accepted := false
 		if c.Result.Error != nil {
 			c.Result.Error, accepted = openModelSelection(c.Result.Error)
@@ -208,24 +241,24 @@ func TestConfigMatchesElixir(t *testing.T) {
 		case accepted:
 			// Main refused this only for its model allowlist, which KOGEN-057 removed.
 			if err != nil {
-				t.Errorf("case %d %q: KOGEN-057 accepts any model and effort, got %v", i, c.Text, err)
+				drift("case %d %q: KOGEN-057 accepts any model and effort, got %v", i, c.Text, err)
 			}
 		case c.Result.Error != nil:
 			se, ok := sys.AsError(err)
 			if !ok {
-				t.Errorf("case %d %q: got %v, want error %+v", i, c.Text, err, c.Result.Error)
+				drift("case %d %q: got %v, want error %+v", i, c.Text, err, c.Result.Error)
 				continue
 			}
 			want := c.Result.Error
 			if se.Class != want.Class || se.Reason != want.Reason || se.Detail != want.Detail || se.Exit != want.Exit ||
 				canon(t, list(se.Lines)) != canon(t, list(want.Lines)) {
-				t.Errorf("case %d %q:\n got %s/%s %q exit %d %q\nwant %+v", i, c.Text, se.Class, se.Reason, se.Detail, se.Exit, se.Lines, *want)
+				drift("case %d %q:\n got %s/%s %q exit %d %q\nwant %+v", i, c.Text, se.Class, se.Reason, se.Detail, se.Exit, se.Lines, *want)
 			}
 		case err != nil:
-			t.Errorf("case %d %q: unexpected error %v", i, c.Text, err)
+			drift("case %d %q: unexpected error %v", i, c.Text, err)
 		default:
 			if got, want := canon(t, configJSON(cfg)), canon(t, elixirConfig(c.Result.Config)); got != want {
-				t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, got, want)
+				drift("case %d %q:\n got %s\nwant %s", i, c.Text, got, want)
 			}
 		}
 	}
@@ -233,6 +266,7 @@ func TestConfigMatchesElixir(t *testing.T) {
 
 func TestRenderMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	for i, c := range g.Render {
 		cfg := &Config{Setup: c.Input.Setup, Fix: c.Input.Fix, Protect: c.Input.Protect}
 		for _, ch := range c.Input.Checks {
@@ -242,7 +276,7 @@ func TestRenderMatchesElixir(t *testing.T) {
 			cfg.Acceptance = &Acceptance{a[0], a[1]}
 		}
 		got := RenderConfig(cfg)
-		if got != c.Text {
+		if got != c.Text && !u.record(got, "render", i, "text") {
 			t.Errorf("case %d:\n got %q\nwant %q", i, got, c.Text)
 		}
 		parsed, err := ParseConfig(got, "r")
@@ -250,7 +284,7 @@ func TestRenderMatchesElixir(t *testing.T) {
 			t.Errorf("case %d: rendered text does not parse: %v", i, err)
 			continue
 		}
-		if g, w := canon(t, configJSON(parsed)), canon(t, elixirConfig(c.Parsed)); g != w {
+		if g, w := canon(t, configJSON(parsed)), canon(t, elixirConfig(c.Parsed)); g != w && !u.record(configJSON(parsed), "render", i, "parsed") {
 			t.Errorf("case %d parsed:\n got %s\nwant %s", i, g, w)
 		}
 	}
@@ -284,20 +318,36 @@ func yamlJSON(n *yamlNode) any {
 
 func TestYAMLMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	for i, c := range g.Yaml {
 		node, problems := parseYAML(c.Text)
+		// drift reports a result that differs from the recorded one; a single problem and a
+		// parsed document are what golden.json can record.
+		drift := func(format string, args ...any) {
+			switch {
+			case node != nil:
+				if u.record(map[string]any{"ok": yamlJSON(node)}, "yaml", i, "result") {
+					return
+				}
+			case len(problems) == 1:
+				if u.record(map[string]any{"error": []any{problems[0].line, problems[0].msg}}, "yaml", i, "result") {
+					return
+				}
+			}
+			t.Errorf(format, args...)
+		}
 		if c.Result.Error != nil {
 			if node != nil || len(problems) != 1 || canon(t, []any{problems[0].line, problems[0].msg}) != canon(t, *c.Result.Error) {
-				t.Errorf("case %d %q: got %v %v, want error %v", i, c.Text, node, problems, *c.Result.Error)
+				drift("case %d %q: got %v %v, want error %v", i, c.Text, node, problems, *c.Result.Error)
 			}
 			continue
 		}
 		if node == nil {
-			t.Errorf("case %d %q: got problems %v", i, c.Text, problems)
+			drift("case %d %q: got problems %v", i, c.Text, problems)
 			continue
 		}
 		if got, want := canon(t, yamlJSON(node)), canon(t, c.Result.Ok); got != want {
-			t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, got, want)
+			drift("case %d %q:\n got %s\nwant %s", i, c.Text, got, want)
 		}
 	}
 }
@@ -316,17 +366,35 @@ func scenarioJSON(s Scenario) map[string]any {
 
 func TestGherkinMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	for i, c := range g.Gherkin {
 		scenarios, err := ParseGherkin(c.Text)
+		// drift reports a result that differs from the recorded one.
+		drift := func(format string, args ...any) {
+			if ge, ok := err.(*GherkinError); ok {
+				if u.record(map[string]any{"error": []any{ge.Line, ge.Message}}, "gherkin", i, "result") {
+					return
+				}
+			} else if err == nil {
+				got := []any{}
+				for _, s := range scenarios {
+					got = append(got, scenarioJSON(s))
+				}
+				if u.record(map[string]any{"scenarios": got}, "gherkin", i, "result") {
+					return
+				}
+			}
+			t.Errorf(format, args...)
+		}
 		if c.Result.Error != nil {
 			ge, ok := err.(*GherkinError)
 			if !ok || canon(t, []any{ge.Line, ge.Message}) != canon(t, *c.Result.Error) {
-				t.Errorf("case %d %q: got %v, want error %v", i, c.Text, err, *c.Result.Error)
+				drift("case %d %q: got %v, want error %v", i, c.Text, err, *c.Result.Error)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("case %d %q: unexpected error %v", i, c.Text, err)
+			drift("case %d %q: unexpected error %v", i, c.Text, err)
 			continue
 		}
 		got := []any{}
@@ -334,7 +402,7 @@ func TestGherkinMatchesElixir(t *testing.T) {
 			got = append(got, scenarioJSON(s))
 		}
 		if gs, ws := canon(t, got), canon(t, c.Result.Scenarios); gs != ws {
-			t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, gs, ws)
+			drift("case %d %q:\n got %s\nwant %s", i, c.Text, gs, ws)
 		}
 	}
 }
@@ -393,46 +461,67 @@ func modelJSON(m *ModelSpec) any {
 	return map[string]any{"path": m.Path, "invariants": list(m.Invariants), "seed": m.Seed, "samples": m.Samples, "steps": m.Steps}
 }
 
+// checkedJSON is a checked Intent in the shape golden.json records it.
+func checkedJSON(intent *Intent, scenarios []Scenario) map[string]any {
+	return map[string]any{
+		"title": intent.Title, "acceptance": list(intent.Acceptance), "model": modelJSON(intent.Model),
+		"decisions": list(intent.Decisions), "tests": list(intent.Tests), "feasibility": list(intent.Feasibility),
+		"scenarios": len(scenarios),
+	}
+}
+
 func TestIntentCheckMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	root := gitRepo(t)
 	writeFile(t, root, ".gitignore", "ignored.js\nbuild/\n")
-	for _, c := range g.Intent {
+	for i, c := range g.Intent {
 		overlay := map[string][]byte{}
 		for k, v := range c.Overlay {
 			overlay[k] = []byte(v)
 		}
 		intent, scenarios, err := CheckIntent(root, "demo-intent", overlay)
+		// drift reports a result that differs from the recorded one. A problem list is
+		// recorded as the test reads it back: the reason, then the lines.
+		drift := func(format string, args ...any) {
+			if err == nil {
+				if u.record(map[string]any{"ok": checkedJSON(intent, scenarios)}, "intent", i, "result") {
+					return
+				}
+			} else if se, ok := sys.AsError(err); ok && se.Class == "intent" && se.Exit == 1 &&
+				se.Detail == map[string]string{"parse": "the Intent cannot be read", "lint": "the Intent needs changes"}[se.Reason] {
+				if u.record(map[string]any{"problems": append([]any{se.Reason}, list(se.Lines)...)}, "intent", i, "result") {
+					return
+				}
+			}
+			t.Errorf(format, args...)
+		}
 		if c.Result.Problems != nil {
 			se, ok := sys.AsError(err)
 			if !ok || se.Class != "intent" || se.Exit != 1 {
-				t.Errorf("%s: got %v, want problems %q", c.Label, err, c.Result.Problems)
+				drift("%s: got %v, want problems %q", c.Label, err, c.Result.Problems)
 				continue
 			}
 			wantReason := c.Result.Problems[0]
 			wantDetail := map[string]string{"parse": "the Intent cannot be read", "lint": "the Intent needs changes"}[wantReason]
 			if se.Reason != wantReason || se.Detail != wantDetail || canon(t, list(se.Lines)) != canon(t, list(c.Result.Problems[1:])) {
-				t.Errorf("%s:\n got %s %q\nwant %q", c.Label, se.Reason, se.Lines, c.Result.Problems)
+				drift("%s:\n got %s %q\nwant %q", c.Label, se.Reason, se.Lines, c.Result.Problems)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("%s: unexpected error %v", c.Label, err)
+			drift("%s: unexpected error %v", c.Label, err)
 			continue
 		}
-		got := map[string]any{
-			"title": intent.Title, "acceptance": list(intent.Acceptance), "model": modelJSON(intent.Model),
-			"decisions": list(intent.Decisions), "tests": list(intent.Tests), "feasibility": list(intent.Feasibility),
-			"scenarios": len(scenarios),
-		}
-		if gs, ws := canon(t, got), canon(t, emptyLists(c.Result.Ok)); gs != ws {
-			t.Errorf("%s:\n got %s\nwant %s", c.Label, gs, ws)
+		if gs, ws := canon(t, checkedJSON(intent, scenarios)), canon(t, emptyLists(c.Result.Ok)); gs != ws {
+			drift("%s:\n got %s\nwant %s", c.Label, gs, ws)
 		}
 	}
 }
 
 func TestIntentReadMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	for i, c := range g.IntentRead {
 		overlay := map[string][]byte{IntentMDPath("demo-intent"): []byte(c.Text)}
 		in, err := ReadIntent("/nonexistent", "demo-intent", overlay)
@@ -454,7 +543,7 @@ func TestIntentReadMatchesElixir(t *testing.T) {
 			}
 		}
 		emptyLists(want)
-		if gs, ws := canon(t, got), canon(t, want); gs != ws {
+		if gs, ws := canon(t, got), canon(t, want); gs != ws && !u.record(got, "intent_read", i, "result") {
 			t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, gs, ws)
 		}
 	}
@@ -462,6 +551,7 @@ func TestIntentReadMatchesElixir(t *testing.T) {
 
 func TestDetectMatchesElixir(t *testing.T) {
 	g := loadGolden(t)
+	u := updatesOf(t, goldenFile)
 	for i, c := range g.Detect {
 		d := Detect(c.Files, c.Tracked)
 		checks := []any{}
@@ -469,14 +559,14 @@ func TestDetectMatchesElixir(t *testing.T) {
 			checks = append(checks, []any{ch.Name, ch.Run})
 		}
 		got := map[string]any{"setup": list(d.Setup), "fix": list(d.Fix), "checks": checks, "protect": list(d.Protect), "runner": orNull(d.Runner)}
-		if gs, ws := canon(t, got), canon(t, c.Result); gs != ws {
+		if gs, ws := canon(t, got), canon(t, c.Result); gs != ws && !u.record(got, "detect", i, "result") {
 			t.Errorf("case %d %v %v:\n got %s\nwant %s", i, c.Files, c.Tracked, gs, ws)
 		}
 	}
-	if got := AcceptanceCommand("features/steps", ProjectRunner); got != g.Acceptance["project"] {
+	if got := AcceptanceCommand("features/steps", ProjectRunner); got != g.Acceptance["project"] && !u.record(got, "acceptance", "project") {
 		t.Errorf("project command %q, want %q", got, g.Acceptance["project"])
 	}
-	if got := AcceptanceCommand("features/step_definitions", KogenRunner); got != g.Acceptance["kogen"] {
+	if got := AcceptanceCommand("features/step_definitions", KogenRunner); got != g.Acceptance["kogen"] && !u.record(got, "acceptance", "kogen") {
 		t.Errorf("kogen command %q, want %q", got, g.Acceptance["kogen"])
 	}
 }

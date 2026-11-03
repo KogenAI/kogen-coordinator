@@ -3,6 +3,7 @@ package project
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -209,26 +210,41 @@ func TestSourceComparisonCopiedCompletelyAtByteBoundary(t *testing.T) {
 
 func TestSourceComparisonMatchesElixir(t *testing.T) {
 	g := loadFactsGolden(t)
+	u := updatesOf(t, factsGoldenFile)
 	root := t.TempDir()
 	path := filepath.Join(root, IntentMDPath("ex"))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range g.Comparison {
+	for i, c := range g.Comparison {
 		if err := os.WriteFile(path, []byte(c.Text), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		got, err := SourceComparison(root, "ex")
+		// drift reports a result that differs from the recorded one; an error with lines is
+		// not a form the golden can record.
+		drift := func(format string, args ...any) {
+			if err == nil {
+				if u.record(map[string]any{"ok": got}, "comparison", i, "result") {
+					return
+				}
+			} else if se, ok := sys.AsError(err); ok && len(se.Lines) == 0 {
+				if u.record(map[string]any{"error": map[string]any{"class": se.Class, "reason": se.Reason, "detail": se.Detail, "exit": se.Exit}}, "comparison", i, "result") {
+					return
+				}
+			}
+			t.Errorf(format, args...)
+		}
 		if c.Result.Ok != nil {
 			if err != nil || got != *c.Result.Ok {
-				t.Errorf("%.50q = %.50q, %v; want %.50q", c.Text, got, err, *c.Result.Ok)
+				drift("%.50q = %.50q, %v; want %.50q", c.Text, got, err, *c.Result.Ok)
 			}
 			continue
 		}
 		want := c.Result.Error
 		se, ok := sys.AsError(err)
 		if !ok || se.Class != want.Class || se.Reason != want.Reason || se.Detail != want.Detail || se.Exit != want.Exit || len(se.Lines) != 0 {
-			t.Errorf("%.50q: %#v, want %+v", c.Text, err, want)
+			drift("%.50q: %#v, want %+v", c.Text, err, want)
 		}
 	}
 	if _, err := SourceComparison(root, "absent"); err == nil {
@@ -238,24 +254,44 @@ func TestSourceComparisonMatchesElixir(t *testing.T) {
 
 func TestConfigDigestMatchesElixirTermToBinary(t *testing.T) {
 	g := loadFactsGolden(t)
+	u := updatesOf(t, factsGoldenFile)
 	if len(g.ConfigDigests) < 12 {
 		t.Fatalf("only %d pinned digests", len(g.ConfigDigests))
 	}
 	seen := map[string]bool{}
-	for _, c := range g.ConfigDigests {
+	for i, c := range g.ConfigDigests {
 		cfg := mustParse(t, c.Text)
+		digest := c.Digest
 		if got := configDigest(cfg); got != c.Digest {
-			t.Errorf("%.80q: %s, want %s", c.Text, got, c.Digest)
+			if u.record(got, "config_digests", i, "digest") {
+				digest = got
+			} else {
+				t.Errorf("%.80q: %s, want %s", c.Text, got, c.Digest)
+			}
 		}
-		seen[c.Digest] = true
+		seen[digest] = true
 	}
 	if len(seen) < 10 {
 		t.Errorf("the pinned configurations hash to only %d different digests", len(seen))
 	}
 }
 
+// cardValue is the text of a source card after marker, up to the first end.
+func cardValue(card, marker, end string) (string, bool) {
+	_, rest, ok := strings.Cut(card, marker)
+	if !ok {
+		return "", false
+	}
+	v, _, _ := strings.Cut(rest, end)
+	return v, true
+}
+
+// cardHashes are the markers before the two hashes of a source card, and what ends each.
+var cardHashes = [][2]string{{"Manifest sha256: ", ";"}, {"contract: ", "."}}
+
 func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 	g := loadFactsGolden(t)
+	u := updatesOf(t, factsGoldenFile)
 	root := provenanceFixture(t, g)
 	cfg, err := LoadConfig(root)
 	if err != nil {
@@ -267,6 +303,9 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if origin.Head != g.Repo.Head && u.record(origin.Head, "repo", "head") {
+		g.Repo.Head = origin.Head
+	}
 	if origin != g.Repo.State.Origin || origin.Head != g.Repo.Head {
 		t.Fatalf("origin %+v, Elixir %+v", origin, g.Repo.State.Origin)
 	}
@@ -275,11 +314,17 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := SourcePath(root, slug)
-	if got := readFile(t, path); got != g.Repo.Captured {
+	if got := readFile(t, path); got != g.Repo.Captured && !u.record(got, "repo", "captured") {
 		t.Fatalf("receipt\n got %s\nwant %s", got, g.Repo.Captured)
 	}
-	if paths, _ := Baseline(root, slug, cfg); Hash(root, paths) != g.Repo.ContractSHA256 {
-		t.Errorf("contract hash differs from Elixir's")
+	paths, _ := Baseline(root, slug, cfg)
+	if contract := Hash(root, paths); contract != g.Repo.ContractSHA256 {
+		// The refines below start from the recorded contract, so they start from the new one.
+		if u.record(contract, "repo", "contract_sha256") {
+			g.Repo.ContractSHA256 = contract
+		} else {
+			t.Errorf("contract hash differs from Elixir's")
+		}
 	}
 
 	// Refine: the old receipt is archived, the correction appended, comparison and contract
@@ -313,8 +358,10 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 		t.Fatalf("cannot find Elixir's root in %q", elixirPath)
 	}
 	here := func(s string) string { return strings.ReplaceAll(s, elixirRoot, root) }
+	// unhere records a text of this run in terms of Elixir's root, as the golden holds it.
+	unhere := func(s string) string { return strings.ReplaceAll(s, root, elixirRoot) }
 	refinedOnce := readFile(t, path)
-	if want := here(g.Repo.Refine.Refined); refinedOnce != want {
+	if want := here(g.Repo.Refine.Refined); refinedOnce != want && !u.record(unhere(refinedOnce), "repo", "refine", "refined") {
 		t.Fatalf("refined receipt\n got %s\nwant %s", refinedOnce, want)
 	}
 	dir := filepath.Dir(path)
@@ -329,7 +376,18 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 	for name, content := range g.Repo.Refine.DirFiles {
 		wantFiles[name] = here(content)
 	}
-	if !reflect.DeepEqual(files, wantFiles) || !reflect.DeepEqual(modes, g.Repo.Refine.DirModes) {
+	filesOK, modesOK := reflect.DeepEqual(files, wantFiles), reflect.DeepEqual(modes, g.Repo.Refine.DirModes)
+	if !filesOK {
+		recorded := map[string]string{}
+		for name, content := range files {
+			recorded[name] = unhere(content)
+		}
+		filesOK = u.record(recorded, "repo", "refine", "dir_files")
+	}
+	if !modesOK {
+		modesOK = u.record(modes, "repo", "refine", "dir_modes")
+	}
+	if !filesOK || !modesOK {
 		t.Errorf("receipt folder: modes %v, Elixir %v; files equal: %v", modes, g.Repo.Refine.DirModes, reflect.DeepEqual(files, wantFiles))
 	}
 
@@ -342,21 +400,32 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The second receipt names the first by the hash of its bytes, which carry the root.
-	twice := func(text string) map[string]any {
+	twice := func(text string) (map[string]any, error) {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(text), &m); err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		previous, _ := m["previous_receipt"].(map[string]any)
 		if previous == nil {
-			t.Fatalf("no previous_receipt in %s", text)
+			return nil, fmt.Errorf("no previous_receipt in %s", text)
 		}
 		delete(m, "previous_receipt")
-		return m
+		return m, nil
 	}
 	got := readFile(t, path)
-	if !reflect.DeepEqual(twice(got), twice(here(g.Repo.Refine.RefinedTwice))) {
-		t.Fatalf("twice refined receipt\n got %s\nwant %s", got, here(g.Repo.Refine.RefinedTwice))
+	gotTwice, err := twice(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantTwice, err := twice(here(g.Repo.Refine.RefinedTwice)); err != nil || !reflect.DeepEqual(gotTwice, wantTwice) {
+		// The recorded second receipt names the first as Elixir's bytes: their hash and folder.
+		recorded := unhere(strings.ReplaceAll(got, sha256Of(refinedOnce), sha256Of(unhere(refinedOnce))))
+		if !u.record(recorded, "repo", "refine", "refined_twice") {
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("twice refined receipt\n got %s\nwant %s", got, here(g.Repo.Refine.RefinedTwice))
+		}
 	}
 	var named struct {
 		Previous SourceRef `json:"previous_receipt"`
@@ -380,10 +449,24 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 	// The Elixir card names the receipt in its own temporary folder, and states the hash of
 	// bytes that are equal to ours; everything else is the same.
 	want := strings.ReplaceAll(g.Repo.Refine.Card, elixirPath, path)
-	want = strings.Replace(want, "Manifest sha256: "+strings.Split(strings.Split(want, "Manifest sha256: ")[1], ";")[0], "Manifest sha256: "+final.SHA256, 1)
-	want = strings.Replace(want, "contract: "+strings.Split(strings.Split(want, "contract: ")[1], ".")[0], "contract: "+final.ContractSHA256, 1)
+	fresh := map[string]string{"Manifest sha256: ": final.SHA256, "contract: ": final.ContractSHA256}
+	for _, h := range cardHashes {
+		if v, ok := cardValue(want, h[0], h[1]); ok {
+			want = strings.Replace(want, h[0]+v, h[0]+fresh[h[0]], 1)
+		}
+	}
 	if card != want {
-		t.Errorf("card\n got %q\nwant %q", card, want)
+		// Record the card with Elixir's receipt folder and the hashes it records, when it has
+		// them: the comparison states this run's hashes in their place.
+		recorded := strings.ReplaceAll(card, path, elixirPath)
+		for _, h := range cardHashes {
+			if v, ok := cardValue(g.Repo.Refine.Card, h[0], h[1]); ok {
+				recorded = strings.Replace(recorded, h[0]+fresh[h[0]], h[0]+v, 1)
+			}
+		}
+		if !u.record(recorded, "repo", "refine", "card") {
+			t.Errorf("card\n got %q\nwant %q", card, want)
+		}
 	}
 }
 
