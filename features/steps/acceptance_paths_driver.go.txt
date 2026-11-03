@@ -1,0 +1,47 @@
+package main
+
+import (
+ "encoding/json"
+ "fmt"
+ "os"
+ "os/exec"
+ "path/filepath"
+
+ "github.com/KogenAI/kogen-coordinator/project"
+ "kogen-loop/sys"
+)
+
+func main() {
+ var in struct { Entries []string; Mode string; BadTitle bool }
+ must(json.NewDecoder(os.Stdin).Decode(&in))
+ base, err := os.MkdirTemp("", "acceptance-paths-"); must(err)
+ defer os.RemoveAll(base)
+ root := filepath.Join(base, "repo")
+ must(os.MkdirAll(root, 0755))
+ out, err := exec.Command("git", "init", "-q", root).CombinedOutput()
+ if err != nil { panic(fmt.Sprintf("git init: %v: %s", err, out)) }
+ write := func(p string) { must(os.MkdirAll(filepath.Dir(p),0755)); must(os.WriteFile(p, []byte("fixture"),0644)) }
+ write(filepath.Join(base,"outside.js"))
+ write(filepath.Join(root,"features/steps/target.js"))
+ switch in.Mode {
+ case "external": must(os.Symlink(filepath.Join(base,"outside.js"),filepath.Join(root,"features/steps/x.js")))
+ case "internal": must(os.Symlink("target.js",filepath.Join(root,"features/steps/x.js")))
+ case "parent": must(os.Symlink(base,filepath.Join(root,"linked")))
+ case "disk": write(filepath.Join(root,"features/steps/x.js"))
+ }
+ feature := project.FeaturePath("demo")
+ title := "Validate paths"
+ if in.BadTitle { title = "Validate paths." }
+ text := "# "+title+"\nSlug: demo\nModel: not applicable — validation only\nAcceptance:\n- "+feature+"\n"
+ for _, p := range in.Entries { text += "- "+p+"\n" }
+ text += "\n## Tests\n- validation: focused regression (regression)\n## Feasibility\n- none\n"
+ overlay := map[string][]byte{project.IntentMDPath("demo"): []byte(text), feature: []byte("Feature: Demo\nScenario: Demo\nThen done\n")}
+ if in.Mode == "overlay" { for _, p := range in.Entries { overlay[p] = []byte("fixture") } }
+ lines := []string{}
+ if _,_,err := project.CheckIntent(root,"demo",overlay); err != nil {
+  e,ok := sys.AsError(err); if !ok { panic(err) }
+  lines = append(lines,e.Lines...)
+ }
+ must(json.NewEncoder(os.Stdout).Encode(lines))
+}
+func must(err error) { if err != nil { panic(err) } }

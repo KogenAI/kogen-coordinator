@@ -710,3 +710,85 @@ func TestCheckIntentUnavailableGit(t *testing.T) {
 		t.Fatalf("problems %q", got)
 	}
 }
+
+func TestCheckIntentAcceptancePathValidation(t *testing.T) {
+	root := intentRoot(t)
+	feature := FeaturePath(demoSlug)
+	entries := []string{"../x.js", "/etc/hosts", "features/steps/a//b.js", ".git/config", "", "./a", "a/../b", "a/./b", "a/", "a/.git/b"}
+	acc := "Acceptance:\n- " + feature
+	overlay := map[string][]byte{FeaturePath(demoSlug): []byte(goodFeature)}
+	var want []string
+	for _, p := range entries {
+		acc += "\n- " + p
+		overlay[p] = []byte("overlay")
+		rule := "must be a clean relative path"
+		if p == ".git/config" || p == "a/.git/b" {
+			rule = "must not contain .git"
+		}
+		want = append(want, "acceptance: "+p+" "+rule)
+	}
+	overlay[IntentMDPath(demoSlug)] = []byte(demoMD(demoParts{acc: &acc}))
+	_, _, err := CheckIntent(root, demoSlug, overlay)
+	if got := problemsOf(t, err, "lint"); !slices.Equal(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	acc = "Acceptance:\n- ../x.js\n- .git/config"
+	overlay[IntentMDPath(demoSlug)] = []byte(demoMD(demoParts{acc: &acc, title: sp("# Bad.")}))
+	_, _, err = CheckIntent(root, demoSlug, overlay)
+	want = []string{"title: the title must not end with a period", "acceptance: the Acceptance: list must start with " + feature, "acceptance: ../x.js must be a clean relative path", "acceptance: .git/config must not contain .git"}
+	if got := problemsOf(t, err, "lint"); !slices.Equal(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestCheckIntentAcceptanceSymlinksAndOverlay(t *testing.T) {
+	root := intentRoot(t)
+	outside := t.TempDir()
+	writeFile(t, root, "inside/target.js", "ok")
+	writeFile(t, outside, "target.js", "outside")
+	for name, target := range map[string]string{"internal": "inside/target.js", "external": filepath.Join(outside, "target.js"), "parent": outside, "inside-parent": "inside"} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "repo-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(alias, "inside/target.js"), filepath.Join(root, "alias-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(alias, "new"), filepath.Join(root, "alias-new")); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		path    string
+		overlay bool
+		want    string
+	}{
+		{"inside/target.js", false, ""}, {"internal", false, ""}, {"alias-link", false, ""}, {"inside-parent/target.js", false, ""},
+		{"external", false, "resolves outside the repository"}, {"parent/target.js", false, "resolves outside the repository"},
+		{"parent/new/file.js", true, "resolves outside the repository"}, {"alias-new/file.js", true, ""}, {"new/dir/file.js", true, ""},
+		{"inside", false, "does not exist"},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			acc := "Acceptance:\n- " + FeaturePath(demoSlug) + "\n- " + c.path
+			overlay := map[string][]byte{IntentMDPath(demoSlug): []byte(demoMD(demoParts{acc: &acc})), FeaturePath(demoSlug): []byte(goodFeature)}
+			if c.overlay {
+				overlay[c.path] = []byte("ok")
+			}
+			_, _, err := CheckIntent(root, demoSlug, overlay)
+			if c.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want := []string{"acceptance: " + c.path + " " + c.want}
+			if got := problemsOf(t, err, "lint"); !slices.Equal(got, want) {
+				t.Fatalf("got %q want %q", got, want)
+			}
+		})
+	}
+}

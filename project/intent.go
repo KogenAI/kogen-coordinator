@@ -284,26 +284,42 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 	}
 
 	feature := FeaturePath(i.Slug)
-	if len(i.Acceptance) > 0 && i.Acceptance[0] == feature {
-		ignoredPaths, err := repogit.New(i.Root, nil).Ignored(i.Acceptance...)
+	ordered := len(i.Acceptance) > 0 && i.Acceptance[0] == feature
+	if !ordered {
+		add("acceptance: the Acceptance: list must start with " + feature)
+	}
+	valid := make([]string, 0, len(i.Acceptance))
+	checks := make(map[string][]string)
+	rules := make([]string, len(i.Acceptance))
+	for n, p := range i.Acceptance {
+		rules[n] = acceptancePathRule(i.Root, p)
+		if rules[n] == "" {
+			checks[p] = acceptanceIgnorePaths(i.Root, p)
+			valid = append(valid, checks[p]...)
+		}
+	}
+	ignored := map[string]bool{}
+	if ordered && len(valid) > 0 {
+		ignoredPaths, err := repogit.New(i.Root, nil).Ignored(valid...)
 		if err != nil {
 			add("acceptance: Git ignore check could not run")
 		}
-		ignored := make(map[string]bool, len(ignoredPaths))
 		for _, p := range ignoredPaths {
 			ignored[p] = true
 		}
-		for _, p := range i.Acceptance {
+	}
+	for n, p := range i.Acceptance {
+		if rules[n] != "" {
+			add("acceptance: " + p + " " + rules[n])
+		} else if ordered {
 			_, inOverlay := i.Overlay[p]
 			switch {
 			case !inOverlay && !isRegular(filepath.Join(i.Root, p)):
 				add("acceptance: " + p + " does not exist")
-			case ignored[p]:
+			case slices.ContainsFunc(checks[p], func(path string) bool { return ignored[path] }):
 				add("acceptance: " + p + " is ignored by Git")
 			}
 		}
-	} else {
-		add("acceptance: the Acceptance: list must start with " + feature)
 	}
 
 	for _, d := range i.Decisions {
@@ -355,6 +371,122 @@ func modelProblems(i *Intent, m *ModelSpec) []string {
 		}
 	}
 	return out
+}
+
+// Git cannot check a path through a symlink directory. Check the link and its
+// resolved target instead, retaining missing suffixes for overlays.
+func acceptanceIgnorePaths(root, path string) []string {
+	parts := strings.Split(path, "/")
+	var checks []string
+	for n := 1; n < len(parts); n++ {
+		prefix := filepath.Join(parts[:n]...)
+		fi, err := os.Lstat(filepath.Join(root, prefix))
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		checks = append(checks, filepath.ToSlash(prefix))
+		resolved, err := filepath.EvalSymlinks(filepath.Join(root, prefix))
+		canonical, rootErr := filepath.EvalSymlinks(root)
+		if err != nil || rootErr != nil {
+			return checks
+		}
+		rel, err := filepath.Rel(canonical, resolved)
+		if err != nil {
+			return checks
+		}
+		path = filepath.ToSlash(filepath.Join(append([]string{rel}, parts[n:]...)...))
+		return append(checks, acceptanceIgnorePaths(root, path)...)
+	}
+	return append(checks, path)
+}
+
+// acceptancePathRule checks spelling before walking existing components, including links.
+func acceptancePathRule(root, path string) string {
+	parts := strings.Split(path, "/")
+	if filepath.IsAbs(path) || path == "" {
+		return "must be a clean relative path"
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "must be a clean relative path"
+		}
+	}
+	for _, part := range parts {
+		if part == ".git" {
+			return "must not contain .git"
+		}
+	}
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "resolves outside the repository"
+	}
+	canonical, err = filepath.Abs(canonical)
+	if err != nil {
+		return "resolves outside the repository"
+	}
+	current := canonical
+	for links := 0; len(parts) > 0; {
+		part := parts[0]
+		parts = parts[1:]
+		current = filepath.Join(current, part)
+		rel, err := filepath.Rel(canonical, current)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "resolves outside the repository"
+		}
+		fi, err := os.Lstat(current)
+		if err != nil {
+			continue // Missing components are permitted for overlay entries.
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		links++
+		if links > 255 {
+			break
+		}
+		target, err := os.Readlink(current)
+		if err != nil {
+			break
+		}
+		current = filepath.Dir(current)
+		if filepath.IsAbs(target) {
+			// Strip the canonical root without cleaning the target: link/.. must
+			// be resolved in filesystem order, not collapsed lexically.
+			prefix := canonical
+			if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+				prefix += string(filepath.Separator)
+			}
+			if target == canonical {
+				target = ""
+			} else if strings.HasPrefix(target, prefix) {
+				target = strings.TrimPrefix(target, prefix)
+			} else {
+				// Find an existing alias of the canonical root, then walk the
+				// remaining components normally (they may be overlay-only).
+				components := strings.Split(strings.TrimPrefix(target, string(filepath.Separator)), string(filepath.Separator))
+				prefix := string(filepath.Separator)
+				found := false
+				for n, component := range components {
+					prefix = filepath.Join(prefix, component)
+					resolved, err := filepath.EvalSymlinks(prefix)
+					if err != nil {
+						break
+					}
+					if resolved == canonical {
+						target = strings.Join(components[n+1:], string(filepath.Separator))
+						found = true
+						break
+					}
+				}
+				if !found {
+					return "resolves outside the repository"
+				}
+			}
+			current = canonical
+		}
+		parts = append(strings.Split(target, string(filepath.Separator)), parts...)
+	}
+	return ""
 }
 
 func isRegular(path string) bool {
