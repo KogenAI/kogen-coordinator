@@ -228,9 +228,10 @@ func CheckIntent(root, slug string, overlay map[string][]byte) (*Intent, []Scena
 	scenarios, err := ParseGherkin(string(b))
 	if err != nil {
 		ge := err.(*GherkinError)
-		return nil, nil, parseError(fmt.Sprintf("acceptance.feature line %d: %s", ge.Line, ge.Message))
+		lines := append([]string{fmt.Sprintf("acceptance.feature line %d: %s", ge.Line, ge.Message)}, lintIntent(intent, nil, false)...)
+		return nil, nil, parseError(lines...)
 	}
-	if problems := lintIntent(intent, scenarios); len(problems) > 0 {
+	if problems := lintIntent(intent, scenarios, true); len(problems) > 0 {
 		e := sys.Fail("intent", "lint", "the Intent needs changes", 1)
 		e.Lines = problems
 		return nil, nil, e
@@ -243,17 +244,21 @@ var (
 	testLineRe = regexp.MustCompile(`^- (none: \S.*|.+: .+ \((unit|integration|scenario|regression|existing)\)\.?)$`)
 )
 
-func lintIntent(i *Intent, scenarios []Scenario) []string {
+// lintIntent lists every problem. With parsed false the feature did not parse, so the checks that
+// need its scenarios are skipped.
+func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 	var problems []string
 	add := func(p ...string) { problems = append(problems, p...) }
 
-	switch {
-	case i.Title == "":
+	if i.Title == "" {
 		add("title: intent.md must start with a # title")
-	case graphemeLen(i.Title) > 50:
-		add("title: the title must be at most 50 characters")
-	case strings.HasSuffix(i.Title, "."):
-		add("title: the title must not end with a period")
+	} else {
+		if n := graphemeLen(i.Title); n > 50 {
+			add(fmt.Sprintf("title: the title must be at most 50 characters, not %d", n))
+		}
+		if strings.HasSuffix(i.Title, ".") {
+			add("title: the title must not end with a period")
+		}
 	}
 
 	if strings.TrimSpace(i.SlugLine) != i.Slug {
@@ -296,8 +301,7 @@ func lintIntent(i *Intent, scenarios []Scenario) []string {
 
 	for _, d := range i.Decisions {
 		if !sourceRe.MatchString(d) {
-			add("decisions: a decision has no source")
-			break
+			add("decisions: " + d + " must end with `(source: request)` or `(source: answer <n>)`")
 		}
 	}
 
@@ -305,9 +309,9 @@ func lintIntent(i *Intent, scenarios []Scenario) []string {
 		add("feasibility: intent.md needs a ## Feasibility section listing each probe, or - none")
 	}
 
-	if len(scenarios) == 0 {
+	if parsed && len(scenarios) == 0 {
 		add("acceptance: acceptance.feature has no scenario")
-	} else {
+	} else if parsed {
 		var scen []string
 		for _, s := range scenarios {
 			for _, t := range s.Tags {

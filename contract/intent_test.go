@@ -112,7 +112,7 @@ func TestCheckIntent(t *testing.T) {
 	}
 	_, _, err = project.CheckIntent(f.Dir, fixtureSlug, intentWith(strings.Repeat("a", 51)))
 	e := wantSysError(t, err, "intent", "lint", 1)
-	equalList(t, "lines", e.Lines, []string{"title: the title must be at most 50 characters"})
+	equalList(t, "lines", e.Lines, []string{"title: the title must be at most 50 characters, not 51"})
 	equal(t, "message", e.Error(), "intent/lint: the Intent needs changes")
 	equal(t, "detail", e.Detail, "the Intent needs changes")
 	if _, _, err := project.CheckIntent(f.Dir, fixtureSlug, intentWith(strings.Repeat("é", 50))); err != nil {
@@ -143,7 +143,7 @@ func TestCheckIntent(t *testing.T) {
 	equalList(t, "problems", e.Lines, []string{
 		"slug: the Slug: line must be fixture",
 		"model: the Model: line must be `not applicable — <reason>` or `.kogen/intents/fixture/model.qnt invariants=<Name> seed=<n> samples=<n> steps=<n>`",
-		"decisions: a decision has no source",
+		"decisions: - Fixture decision. must end with `(source: request)` or `(source: answer <n>)`",
 		"feasibility: intent.md needs a ## Feasibility section listing each probe, or - none",
 	})
 

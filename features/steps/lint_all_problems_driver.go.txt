@@ -1,0 +1,36 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/KogenAI/kogen-coordinator/project"
+	"kogen-loop/sys"
+)
+
+// Reads {"intent": ..., "feature": ...} on stdin, checks them as the Intent `demo` laid over an
+// empty temporary root, and prints {"exit": n, "render": "..."} (exit 0 and render "" when accepted).
+func main() {
+	var in struct{ Intent, Feature string }
+	if err := json.NewDecoder(os.Stdin).Decode(&in); err != nil {
+		panic(err)
+	}
+	root, err := os.MkdirTemp("", "lint-all-problems-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(root)
+	overlay := map[string][]byte{project.IntentMDPath("demo"): []byte(in.Intent), project.FeaturePath("demo"): []byte(in.Feature)}
+	out := map[string]any{"exit": 0, "render": ""}
+	if _, _, err := project.CheckIntent(root, "demo", overlay); err != nil {
+		e, ok := sys.AsError(err)
+		if !ok {
+			panic(fmt.Sprintf("CheckIntent returned a non-sys error: %v", err))
+		}
+		out = map[string]any{"exit": e.Exit, "render": e.Render()}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+		panic(err)
+	}
+}
