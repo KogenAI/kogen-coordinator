@@ -76,6 +76,19 @@ func objectAt(m map[string]any, key string) map[string]any {
 }
 
 func detectNpm(d *Detected, pkg map[string]any, tracked []string) {
+	manager := "npm"
+	yarn := slices.Contains(tracked, "yarn.lock")
+	pnpm := slices.Contains(tracked, "pnpm-lock.yaml")
+	switch {
+	case slices.Contains(tracked, "package-lock.json"):
+		d.Setup = append(d.Setup, npmCI)
+	case yarn && !pnpm:
+		manager = "yarn"
+		d.Setup = append(d.Setup, "yarn install --frozen-lockfile")
+	case pnpm && !yarn:
+		manager = "pnpm"
+		d.Setup = append(d.Setup, "pnpm install --frozen-lockfile")
+	}
 	scripts := objectAt(pkg, "scripts")
 	for _, script := range npmScripts {
 		body, ok := scripts[script].(string)
@@ -86,7 +99,7 @@ func detectNpm(d *Detected, pkg map[string]any, tracked []string) {
 		if slices.ContainsFunc(d.Checks, func(c Check) bool { return c.Name == script }) {
 			name = "npm-" + script
 		}
-		d.Checks = append(d.Checks, Check{name, "npm run " + script})
+		d.Checks = append(d.Checks, Check{name, manager + " run " + script})
 	}
 	_, prod := objectAt(pkg, "dependencies")["@cucumber/cucumber"]
 	_, dev := objectAt(pkg, "devDependencies")["@cucumber/cucumber"]
@@ -99,9 +112,6 @@ func detectNpm(d *Detected, pkg map[string]any, tracked []string) {
 				break
 			}
 		}
-	}
-	if slices.Contains(tracked, "package-lock.json") {
-		d.Setup = append(d.Setup, npmCI)
 	}
 }
 

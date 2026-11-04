@@ -237,3 +237,59 @@ func TestDetectBundler(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectPackageManagers(t *testing.T) {
+	pkg := `{"scripts":{"check":"custom","typecheck":"tsc","lint":"eslint .","test":"jest"}}`
+	files := map[string]string{"package.json": pkg, "yarn.lock": "", "pnpm-lock.yaml": "", "package-lock.json": ""}
+	cases := []struct {
+		name    string
+		tracked []string
+		manager string
+		setup   []string
+	}{
+		{"yarn", []string{"yarn.lock"}, "yarn", []string{"yarn install --frozen-lockfile"}},
+		{"pnpm", []string{"pnpm-lock.yaml"}, "pnpm", []string{"pnpm install --frozen-lockfile"}},
+		{"npm", []string{"package-lock.json"}, "npm", []string{npmCI}},
+		{"ambiguous", []string{"yarn.lock", "pnpm-lock.yaml"}, "npm", nil},
+		{"untracked", nil, "npm", nil},
+		{"npm and yarn", []string{"package-lock.json", "yarn.lock"}, "npm", []string{npmCI}},
+		{"npm and pnpm", []string{"package-lock.json", "pnpm-lock.yaml"}, "npm", []string{npmCI}},
+		{"all", []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}, "npm", []string{npmCI}},
+		{"nested lock", []string{"sub/yarn.lock"}, "npm", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(files, c.tracked)
+			want := Detected{Setup: c.setup, Checks: []Check{{"test", c.manager + " run test"}, {"lint", c.manager + " run lint"}, {"typecheck", c.manager + " run typecheck"}, {"check", c.manager + " run check"}}}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+	for _, lock := range []string{"yarn.lock", "pnpm-lock.yaml", "package-lock.json"} {
+		if got := Detect(nil, []string{lock}); !reflect.DeepEqual(got, Detected{}) {
+			t.Errorf("without package.json %s: %+v", lock, got)
+		}
+		if got := Detect(map[string]string{"package.json": "invalid"}, []string{lock}); !reflect.DeepEqual(got, Detected{}) {
+			t.Errorf("invalid package.json %s: %+v", lock, got)
+		}
+	}
+}
+
+func TestDetectAlternativeManagerScriptsAndRunner(t *testing.T) {
+	for _, c := range []struct{ lock, manager string }{{"yarn.lock", "yarn"}, {"pnpm-lock.yaml", "pnpm"}} {
+		t.Run(c.manager, func(t *testing.T) {
+			pkg := `{"scripts":{"test":"echo \"Error: no test specified\" && exit 1","lint":"eslint ."},"devDependencies":{"@cucumber/cucumber":"*"}}`
+			got := Detect(map[string]string{"package.json": pkg}, []string{c.lock, "features/step_definitions/a.js"})
+			want := Detected{Setup: []string{c.manager + " install --frozen-lockfile"}, Checks: []Check{{"lint", c.manager + " run lint"}}, Runner: "features/step_definitions"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+			got = Detect(map[string]string{"mix.exs": "", "package.json": `{"scripts":{"test":"jest","lint":"eslint ."}}`}, []string{c.lock})
+			want = Detected{Setup: []string{"mix deps.get", c.manager + " install --frozen-lockfile"}, Checks: []Check{{"compile", "mix compile --warnings-as-errors"}, {"test", "mix test"}, {"npm-test", c.manager + " run test"}, {"lint", c.manager + " run lint"}}}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
