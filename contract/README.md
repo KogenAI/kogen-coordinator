@@ -46,6 +46,7 @@ Each item is asserted so that changing it fails the suite.
 - `hash-line`, `TestHashIsTheDigestOfPathDigestLines`: the approval hash is recomputed with `crypto/sha256`.
 - `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns.
 - `intent-paths`, `TestIntentPaths`: the paths under `.kogen/intents/<slug>`.
+- `build-edits`, `TestBuildEditsLeaveOutTheApprovedIntent`: `project.OwnedByIntent` (under `.kogen/intents/<slug>/` or `.kogen/models/<slug>/`, byte-exact prefix) and `project.BuildEdits`, a Build's edit list: the tree diff in order without the approved Intent's own paths.
 - `model-line` and `model-none`, `TestParseModelSpec`: the Model line.
 - `intent-lint`, `intent-title-limit` and `tests-layers`, `TestCheckIntent`: the lint error, the 50-character title limit and the five test layers.
 - `stages-invalid`, `TestParseStages`: the `## Stages` plan and its error text.

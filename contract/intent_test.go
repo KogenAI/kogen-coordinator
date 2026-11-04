@@ -177,3 +177,36 @@ func TestCheckTitle(t *testing.T) {
 		t.Fatalf("unexpected problems: %v", got)
 	}
 }
+
+// build-edits: kogen-build's interrupted-stop list leaves out the approved Intent's own files.
+func TestBuildEditsLeaveOutTheApprovedIntent(t *testing.T) {
+	for path, want := range map[string]bool{
+		".kogen/intents/complete-task/intent.md":         true,
+		".kogen/intents/complete-task-archive/intent.md": false,
+		".kogen/models/complete-task-archive/model.json": false,
+		".kogen/models/complete-task/model.json":         true,
+		".kogen/models/complete-task/model.qnt":          true,
+		"README.md":                                      false,
+		"lib/complete-task/model.json":                   false,
+	} {
+		if got := project.OwnedByIntent("complete-task", path); got != want {
+			t.Errorf("OwnedByIntent(%q) = %v, want %v", path, got, want)
+		}
+	}
+	changed := []string{
+		".kogen/intents/complete-task-archive/intent.md",
+		".kogen/models/complete-task/model.json",
+		".kogen/models/complete-task-archive/model.json",
+		".kogen/models/complete-task/model.qnt",
+		"README.md",
+		".kogen/intents/complete-task/intent.md",
+		"lib/complete-task/model.json",
+	}
+	equalList(t, "edits", project.BuildEdits("complete-task", changed), []string{
+		".kogen/intents/complete-task-archive/intent.md",
+		".kogen/models/complete-task-archive/model.json",
+		"README.md",
+		"lib/complete-task/model.json",
+	})
+	equal(t, "edits of nothing", len(project.BuildEdits("complete-task", nil)), 0)
+}
