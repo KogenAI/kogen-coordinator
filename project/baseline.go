@@ -25,14 +25,23 @@ import (
 func Baseline(root, slug string, cfg *Config) ([]string, error) {
 	var intentFiles []string
 	dir := filepath.Join(root, IntentDir(slug))
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && isRegular(path) {
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == dir && errors.Is(err, fs.ErrNotExist) {
+				return nil // no Intent folder: the Intent contributes no files
+			}
+			return fmt.Errorf("walk %s: %w", path, err)
+		}
+		if !d.IsDir() && isRegular(path) {
 			if rel, err := filepath.Rel(root, path); err == nil {
 				intentFiles = append(intentFiles, filepath.ToSlash(rel))
 			}
 		}
 		return nil
 	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
 	md, feature := IntentMDPath(slug), FeaturePath(slug)
 	slices.SortFunc(intentFiles, func(a, b string) int {
 		rank := func(p string) int {

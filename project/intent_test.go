@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -599,6 +601,46 @@ func TestBaselineWithoutIntentFiles(t *testing.T) {
 	got, err := Baseline(root, "nothing", &Config{})
 	if err != nil || !slices.Equal(got, []string{ConfigPath, ModelsPath}) {
 		t.Errorf("got %v %v", got, err)
+	}
+}
+
+func TestBaselineUnreadableIntentSubfolderFails(t *testing.T) {
+	root := gitRepo(t)
+	slug := "demo"
+	writeFile(t, root, IntentMDPath(slug), "# x\n")
+	writeFile(t, root, FeaturePath(slug), goodFeature)
+	writeFile(t, root, IntentDir(slug)+"/fixtures/data.txt", "d")
+	locked := filepath.Join(root, IntentDir(slug), "fixtures")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("mode 000 folder is still readable (running as root?)")
+	}
+	got, err := Baseline(root, slug, &Config{})
+	if err == nil || got != nil {
+		t.Fatalf("got %v %v", got, err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("error does not wrap fs.ErrPermission: %v", err)
+	}
+	if !strings.Contains(err.Error(), IntentDir(slug)+"/fixtures") {
+		t.Errorf("error does not name the folder: %v", err)
+	}
+}
+
+func TestBaselineSkipsDanglingSymlink(t *testing.T) {
+	root := gitRepo(t)
+	slug := "demo"
+	writeFile(t, root, IntentMDPath(slug), "# x\n")
+	if err := os.Symlink("missing-target", filepath.Join(root, IntentDir(slug), "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Baseline(root, slug, &Config{})
+	want := []string{IntentMDPath(slug), ConfigPath, ModelsPath}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("got %v %v, want %v", got, err, want)
 	}
 }
 
