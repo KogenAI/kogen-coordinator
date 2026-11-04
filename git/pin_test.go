@@ -167,6 +167,7 @@ func TestPinExecutableConfiguration(t *testing.T) {
 		"pager.log", "credential.helper", "credential.https://example.invalid.helper", "gpg.program", "gpg.ssh.program",
 		"gpg.x509.program", "filter.audit.clean", "filter.audit.smudge", "filter.audit.process", "diff.external",
 		"diff.audit.command", "diff.audit.textconv", "merge.audit.driver", "interactive.diffFilter", "alias.audit",
+		"hook.lint.command", "hook.a.b.command",
 	}
 	secret := "s3cr3t-token-value"
 	for _, key := range keys {
@@ -202,6 +203,12 @@ func TestPinExecutableConfiguration(t *testing.T) {
 		wantChanges(t, base, f.Repo, "credential.helper")
 		f.git(t, "config", "--unset-all", "credential.helper")
 		wantChanges(t, base, f.Repo, "credential.helper")
+	})
+	t.Run("hook event and enabled are not pinned", func(t *testing.T) {
+		base := mustPin(t, f.Repo)
+		f.configure(t, "hook.lint.event", "pre-commit")
+		f.configure(t, "hook.lint.enabled", "false")
+		wantChanges(t, base, f.Repo)
 	})
 	t.Run("unrelated configuration is not pinned", func(t *testing.T) {
 		base := mustPin(t, f.Repo)
@@ -288,10 +295,11 @@ func TestPinRunsNothing(t *testing.T) {
 		{"core.fsmonitor", prog}, {"core.sshCommand", prog}, {"core.editor", prog}, {"core.pager", prog},
 		{"filter.audit.clean", prog}, {"filter.audit.process", prog}, {"diff.external", prog}, {"alias.audit", "!" + prog},
 		{"credential.helper", prog}, {"gpg.program", prog}, {"interactive.diffFilter", prog},
+		{"hook.audit.command", prog}, {"hook.audit.event", "pre-commit"},
 	} {
 		f.configure(t, kv[0], kv[1])
 	}
-	if got := base.Changes(mustPin(t, f.Repo)); len(got) != 11 {
+	if got := base.Changes(mustPin(t, f.Repo)); len(got) != 12 {
 		t.Fatalf("changes = %q", got)
 	}
 	if _, err := os.Stat(marker); err == nil {

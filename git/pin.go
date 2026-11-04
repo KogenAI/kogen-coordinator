@@ -13,8 +13,9 @@ import (
 
 // Pin is the Git execution state of a checkout that a later trusted Git command would obey: every
 // file of the effective hooks directory and the effective values of the configuration keys that
-// select an executable. It is collected and compared without running a hook or a configured
-// program, and it keeps digests, never configuration values.
+// select an executable, among them the hook.<name>.command of a hook defined in configuration. It
+// is collected and compared without running a hook or a configured program, and it keeps digests,
+// never configuration values.
 //
 // A pin holds one view for the environment Kogen runs Git with and, when that environment overrides
 // where Git reads its system and global configuration (GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM,
@@ -68,6 +69,7 @@ var (
 		"diff": {"command", "textconv"}, "merge": {"driver"}, "difftool": {"cmd", "path"},
 		"mergetool": {"cmd", "path"}, "browser": {"cmd", "path"}, "man": {"cmd", "path"},
 		"remote": {"uploadpack", "receivepack", "vcs"}, "trailer": {"cmd"}, "submodule": {"update"},
+		"hook": {"command"},
 	}
 	executableSections = []string{"alias", "pager"} // every key of these sections
 	canonicalVars      = map[string]string{
