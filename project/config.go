@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/KogenAI/kogen-loop/sys"
@@ -25,11 +24,9 @@ const ConfigPath = ".kogen/project.yaml"
 // BaseURL is set only for the openai-compatible provider (the host's /v1 base); it is
 // omitted from JSON when empty so existing checkpoints keep their bytes.
 //
-// Executor and MaxRounds may be set on each of the shape, build and review roles
-// (docs/executor-contract.md): Executor is "" for the native role (also when the file says
-// `executor: native`) or "claude-code"; MaxRounds is claude-code's round cap for that role,
-// 0 when the file sets none (the default, DefaultExternalRounds, applies). Both are omitted from JSON
-// when empty for the same reason.
+// Executor is "" for the native role (including `executor: native`) or "claude-code".
+// MaxRounds remains available to consumers but is zero for loaded roles. Both fields
+// are omitted from JSON when empty so existing checkpoints keep their bytes.
 type Role struct {
 	Provider, Model, Effort string
 	BaseURL                 string `json:",omitempty"`
@@ -37,7 +34,7 @@ type Role struct {
 	MaxRounds               int    `json:",omitempty"`
 }
 
-// DefaultExternalRounds is the round cap of an external role that sets no max_rounds.
+// DefaultExternalRounds caps a review role when its external executor supplies no round limit.
 const DefaultExternalRounds = 6
 
 // Executor names a role may select (the native one is the empty Executor).
@@ -334,13 +331,13 @@ func (v *validator) models(node *yamlNode) map[string]Role {
 			v.add(p.line, "unknown key "+p.key)
 			continue
 		}
-		rest, exec, rounds, ok := v.executorKeys(p)
+		rest, exec, ok := v.executorKeys(p)
 		if !ok {
 			continue
 		}
 		if exec == ExecutorClaudeCode {
 			if r, ok := v.externalRole(rest, "models."+p.key, p.line); ok {
-				r.Executor, r.MaxRounds = exec, rounds
+				r.Executor = exec
 				roles[p.key] = r
 			}
 			continue
@@ -357,38 +354,34 @@ func (v *validator) models(node *yamlNode) map[string]Role {
 	return roles
 }
 
-// maxRoundsRe is a positive decimal integer as the configuration spells it.
-var maxRoundsRe = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-
-// executorKeys separates the `executor` and `max_rounds` keys of a models role from the rest
-// of its mapping (docs/executor-contract.md section 5). They are valid for the shape, build
-// and review roles independently; max_rounds only with executor claude-code. ok is false when the role must be skipped
-// (a problem was reported). rest is the mapping without the two keys.
-func (v *validator) executorKeys(p yamlPair) (rest *yamlNode, exec string, rounds int, ok bool) {
+// executorKeys separates executor from a role mapping and rejects the removed round setting.
+func (v *validator) executorKeys(p yamlPair) (rest *yamlNode, exec string, ok bool) {
 	rest = p.node
 	if p.node.kind != kindMap {
-		return rest, "", 0, true
+		return rest, "", true
 	}
-	var execPair, roundsPair *yamlPair
+	var execPair *yamlPair
 	var kept []yamlPair
+	ok = true
+	path := "models." + p.key
 	for i := range p.node.pairs {
-		switch p.node.pairs[i].key {
+		pair := &p.node.pairs[i]
+		switch pair.key {
 		case "executor":
-			execPair = &p.node.pairs[i]
+			execPair = pair
 		case "max_rounds":
-			roundsPair = &p.node.pairs[i]
+			v.add(pair.line, path+".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none")
+			ok = false
 		default:
-			kept = append(kept, p.node.pairs[i])
+			kept = append(kept, *pair)
 		}
 	}
-	if execPair == nil && roundsPair == nil {
-		return rest, "", 0, true
+	if execPair == nil && ok {
+		return rest, "", true
 	}
-	path := "models." + p.key
 	copied := *p.node
 	copied.pairs = kept
 	rest = &copied
-	ok = true
 	if execPair != nil {
 		n := execPair.node
 		if n.kind == kindScalar && !n.null && isString(n) && (n.text == ExecutorNative || n.text == ExecutorClaudeCode) {
@@ -400,20 +393,7 @@ func (v *validator) executorKeys(p yamlPair) (rest *yamlNode, exec string, round
 			ok = false
 		}
 	}
-	if roundsPair != nil {
-		n := roundsPair.node
-		switch {
-		case !(n.kind == kindScalar && !n.null && !n.quoted && maxRoundsRe.MatchString(n.text)):
-			v.add(roundsPair.line, path+".max_rounds must be a positive integer")
-			ok = false
-		case exec != ExecutorClaudeCode:
-			v.add(roundsPair.line, path+".max_rounds is only for executor claude-code")
-			ok = false
-		default:
-			rounds, _ = strconv.Atoi(n.text)
-		}
-	}
-	return rest, exec, rounds, ok
+	return rest, exec, ok
 }
 
 // externalRole is a role served by an external executor: Kogen's provider keys do not apply

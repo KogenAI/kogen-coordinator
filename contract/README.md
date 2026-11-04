@@ -39,7 +39,7 @@ Each item is asserted so that changing it fails the suite.
 - `config-invalid-lines`, `TestConfigInvalidNamesTheLines`: an invalid file is `environment/project_config_invalid` (exit 3) with one `line N: ...` line per problem.
 - `config-not-initialized`, `TestConfigNotInitialized`: a root without the file is `environment/not_initialized` (exit 3).
 - `named-commands`, `TestNamedCommandsOrder`: `setup-N`, `fix-N`, the checks, then `acceptance`.
-- `external-rounds` and `executor-claude-code`, `TestExecutorRoleLineup`: `DefaultExternalRounds` is 6, `ExecutorClaudeCode` is `claude-code`, and the executor and `max_rounds` of a role.
+- `external-rounds` and `executor-claude-code`, `TestExecutorRoleLineup`: `DefaultExternalRounds` is 6, `ExecutorClaudeCode` is `claude-code`, the executor of a role, zero `MaxRounds` for loaded roles, and rejection of the removed `max_rounds` setting.
 - `approval-path` and `approval-json`, `TestApprovalPathAndJSON`: the approval file's path and exact bytes, and its round trip.
 - `hash-line`, `TestHashIsTheDigestOfPathDigestLines`: the approval hash is recomputed with `crypto/sha256`.
 - `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns.

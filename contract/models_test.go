@@ -32,14 +32,14 @@ func TestModelsLineup(t *testing.T) {
 		}
 	}
 	team := "models:\n  build: {provider: openai-compatible, model: team, effort: high, base_url: 'http://localhost/v1/'}\n"
-	local := "models:\n  build: {executor: claude-code, model: local, effort: max, max_rounds: 3}\n"
+	local := "models:\n  build: {executor: claude-code, model: local, effort: max}\n"
 	writeFile(t, root, project.ModelsPath, team)
 	writeFile(t, root, project.LocalModelsPath, local)
 	lineup, err = project.LoadModels(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lineup.Roles["build"] != (project.Role{Executor: "claude-code", Model: "local", Effort: "max", MaxRounds: 3}) || lineup.Sources["build"] != project.LocalModelsPath || lineup.Roles["shape"] != project.DefaultModels()["shape"] || lineup.Sources["shape"] != project.ModelsPath {
+	if lineup.Roles["build"] != (project.Role{Executor: "claude-code", Model: "local", Effort: "max"}) || lineup.Sources["build"] != project.LocalModelsPath || lineup.Roles["shape"] != project.DefaultModels()["shape"] || lineup.Sources["shape"] != project.ModelsPath {
 		t.Fatalf("override: %+v", lineup)
 	}
 	for path, want := range map[string]string{project.ModelsPath: team, project.LocalModelsPath: local} {
@@ -54,6 +54,7 @@ func TestModelsValidation(t *testing.T) {
 	for _, body := range []string{
 		"models:\n  build: {provider: openai-compatible, model: m, effort: high}\n",
 		"models:\n  build: {executor: native, model: m, effort: high, max_rounds: 2}\n",
+		"models:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n",
 		"models:\n  build: {executor: claude-code, provider: anthropic, model: m, effort: max}\n",
 		"models:\n  build: {provider: anthropic, model: m, effort: ultra}\n",
 		"models: {}\nversion: 1\n",
@@ -65,6 +66,9 @@ func TestModelsValidation(t *testing.T) {
 				writeFile(t, root, path, body)
 				_, err := project.LoadModels(root)
 				e := wantSysError(t, err, "environment", "project_config_invalid", 3)
+				if strings.Contains(body, "max_rounds") && (len(e.Lines) != 1 || !strings.Contains(e.Lines[0], "max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none")) {
+					t.Fatalf("removed key: %+v", e)
+				}
 				if !strings.Contains(e.Detail, path) || len(e.Lines) == 0 || !strings.HasPrefix(e.Lines[0], "line ") {
 					t.Fatalf("error: %+v", e)
 				}

@@ -589,10 +589,6 @@ func TestBuildExecutorSelection(t *testing.T) {
 	}{
 		{"claude-code with model and effort", "{executor: claude-code, model: claude-sonnet-5-5, effort: high}",
 			Role{Model: "claude-sonnet-5-5", Effort: "high", Executor: "claude-code"}},
-		{"claude-code with max_rounds", "{executor: claude-code, model: claude-sonnet-5-5, effort: high, max_rounds: 6}",
-			Role{Model: "claude-sonnet-5-5", Effort: "high", Executor: "claude-code", MaxRounds: 6}},
-		{"key order does not matter", "{max_rounds: 12, effort: low, model: m, executor: claude-code}",
-			Role{Model: "m", Effort: "low", Executor: "claude-code", MaxRounds: 12}},
 		{"quoted executor name", `{executor: "claude-code", model: m, effort: low}`, Role{Model: "m", Effort: "low", Executor: "claude-code"}},
 		// Written out, the native executor is the native builder: no value differs from a file
 		// that says nothing, so checkpoints keep their bytes.
@@ -612,13 +608,32 @@ func TestBuildExecutorSelection(t *testing.T) {
 		})
 	}
 	// Block form.
-	cfg := mustParse(t, "version: 1\nmodels:\n  build:\n    executor: claude-code\n    model: m\n    effort: low\n    max_rounds: 2\n")
-	if got := cfg.Models["build"]; got != (Role{Model: "m", Effort: "low", Executor: "claude-code", MaxRounds: 2}) {
+	cfg := mustParse(t, "version: 1\nmodels:\n  build:\n    executor: claude-code\n    model: m\n    effort: low\n")
+	if got := cfg.Models["build"]; got != (Role{Model: "m", Effort: "low", Executor: "claude-code"}) {
 		t.Fatalf("block form %+v", got)
 	}
 	// The other roles keep their defaults.
 	if cfg.Models["shape"] != DefaultModels()["shape"] || cfg.Models["review"] != DefaultModels()["review"] {
 		t.Fatalf("other roles changed: %+v", cfg.Models)
+	}
+}
+
+func TestRemovedMaxRounds(t *testing.T) {
+	for _, tc := range []struct{ role, options string }{
+		{"shape", "executor: claude-code, max_rounds: 3"},
+		{"build", "executor: claude-code, max_rounds: 3"},
+		{"review", "executor: claude-code, max_rounds: 3"},
+		{"build", "executor: native, max_rounds: 2"},
+		{"build", "max_rounds: 0"},
+		{"build", "max_rounds: nonsense"},
+	} {
+		t.Run(tc.role+tc.options, func(t *testing.T) {
+			se := configError(t, "version: 1\nmodels:\n  "+tc.role+": {"+tc.options+"}\n", "f")
+			want := "line 3: models." + tc.role + ".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"
+			if !slices.Equal(se.Lines, []string{want}) || !strings.Contains(se.Detail, "f") {
+				t.Fatalf("%+v", se)
+			}
+		})
 	}
 }
 
@@ -636,16 +651,6 @@ func TestBuildExecutorConfigurationErrors(t *testing.T) {
 		{"claude-code needs an effort", "build: {executor: claude-code, model: m}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
 		{"claude-code needs non-blank model", "build: {executor: claude-code, model: ' ', effort: e}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
 		{"claude-code takes no other key", "build: {executor: claude-code, model: m, effort: e, sandbox: true}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
-		{"max_rounds needs claude-code", "build: {model: m, effort: e, max_rounds: 3}", "line 3: models.build.max_rounds is only for executor claude-code"},
-		{"max_rounds with native", "build: {executor: native, model: m, effort: e, max_rounds: 3}", "line 3: models.build.max_rounds is only for executor claude-code"},
-		{"max_rounds zero", "build: {executor: claude-code, model: m, effort: e, max_rounds: 0}", "line 3: models.build.max_rounds must be a positive integer"},
-		{"max_rounds negative", "build: {executor: claude-code, model: m, effort: e, max_rounds: -1}", "line 3: models.build.max_rounds must be a positive integer"},
-		{"max_rounds fraction", "build: {executor: claude-code, model: m, effort: e, max_rounds: 2.5}", "line 3: models.build.max_rounds must be a positive integer"},
-		{"max_rounds text", "build: {executor: claude-code, model: m, effort: e, max_rounds: six}", "line 3: models.build.max_rounds must be a positive integer"},
-		{"max_rounds quoted", `build: {executor: claude-code, model: m, effort: e, max_rounds: "6"}`, "line 3: models.build.max_rounds must be a positive integer"},
-		{"max_rounds leading zero", "build: {executor: claude-code, model: m, effort: e, max_rounds: 06}", "line 3: models.build.max_rounds must be a positive integer"},
-		{"shape max_rounds needs claude-code", "shape: {model: m, effort: e, max_rounds: 3}", "line 3: models.shape.max_rounds is only for executor claude-code"},
-		{"review max_rounds needs claude-code", "review: {model: m, effort: e, max_rounds: 3}", "line 3: models.review.max_rounds is only for executor claude-code"},
 		{"review unknown executor", "review: {executor: codex, model: m, effort: e}", "line 3: models.review.executor must be native or claude-code"},
 		{"shape claude-code forbids provider", "shape: {executor: claude-code, provider: anthropic, model: m, effort: e}", "line 3: models.shape.provider is not allowed with executor claude-code"},
 	} {
@@ -659,7 +664,7 @@ func TestBuildExecutorConfigurationErrors(t *testing.T) {
 }
 
 // TestClaudeLineupRoleConfiguration: shape, build and review select native or claude-code
-// independently, with model and effort passed through and a per-role round cap.
+// independently, with model and effort passed through.
 func TestClaudeLineupRoleConfiguration(t *testing.T) {
 	ext := func(rounds int) Role {
 		return Role{Model: "claude-opus-5-5", Effort: "xhigh", Executor: "claude-code", MaxRounds: rounds}
@@ -690,21 +695,11 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 			}
 		}
 	}
-	// A round cap is per role: 1 and 2 are accepted on the external roles, the default is 0 here
-	// (DefaultExternalRounds applies) and the cap stays invalid without claude-code.
-	cfg := mustParse(t, "version: 1\nmodels:\n  shape: {executor: claude-code, model: a, effort: low, max_rounds: 1}\n  review: {executor: claude-code, model: c, effort: high, max_rounds: 2}\n")
-	if cfg.Models["shape"].MaxRounds != 1 || cfg.Models["review"].MaxRounds != 2 || cfg.Models["build"].MaxRounds != 0 {
-		t.Fatalf("rounds %+v", cfg.Models)
-	}
 	if DefaultExternalRounds != 6 {
 		t.Fatalf("default rounds %d", DefaultExternalRounds)
 	}
 	for _, r := range roles {
-		se := configError(t, "version: 1\nmodels:\n  "+r+": {model: m, effort: e, max_rounds: 3}\n", "f")
-		if !slices.Equal(se.Lines, []string{"line 3: models." + r + ".max_rounds is only for executor claude-code"}) {
-			t.Fatalf("%s: %+v", r, se)
-		}
-		se = configError(t, "version: 1\nmodels:\n  "+r+": {executor: claude-code, base_url: 'http://x/v1', model: m, effort: e}\n", "f")
+		se := configError(t, "version: 1\nmodels:\n  "+r+": {executor: claude-code, base_url: 'http://x/v1', model: m, effort: e}\n", "f")
 		if !slices.Equal(se.Lines, []string{"line 3: models." + r + ".base_url is not allowed with executor claude-code"}) {
 			t.Fatalf("%s: %+v", r, se)
 		}

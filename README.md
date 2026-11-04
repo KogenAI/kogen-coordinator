@@ -27,6 +27,10 @@ source of each role, including defaults. Invalid files report configuration erro
 line diagnostics; neither file is written by the loader. `project.ModelsTemplate()` returns a
 team file with the defaults in `ModelRoles` order.
 
+The former `models.<role>.max_rounds` setting is rejected in all three files. An external
+executor's own round limit caps a role; when it supplies none, 6 caps a review role.
+`Role.MaxRounds` remains available for consumers and is zero for loaded roles.
+
 The approval baseline includes the team path immediately after the project configuration, even
 when the team file is absent. The local path is not automatically protected; explicit `protect`
 patterns continue to apply. Thus local-only changes do not affect the ordinary approval hash,

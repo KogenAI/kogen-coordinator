@@ -169,11 +169,9 @@ func TestExecutorRoleLineup(t *testing.T) {
 		t.Fatalf("Executor = %q", got)
 	}
 
-	cfg, err = project.ParseConfig("version: 1\nmodels:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n", "f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "MaxRounds", cfg.Models["build"].MaxRounds, 3)
+	_, err = project.ParseConfig("version: 1\nmodels:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n", "f")
+	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
+	equalList(t, "lines", e.Lines, []string{"line 3: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
 
 	// An explicit native role is the omitted one, and neither names an executor in its state.
 	omitted, err := project.ParseConfig("version: 1\nmodels:\n  review: {model: r, effort: high}\n", "f")
@@ -194,8 +192,8 @@ func TestExecutorRoleLineup(t *testing.T) {
 	equal(t, "native role JSON", string(b), `{"Provider":"","Model":"r","Effort":"high"}`)
 
 	_, err = project.ParseConfig("version: 1\nmodels:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n", "f")
-	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
-	equalList(t, "lines", e.Lines, []string{"line 3: models.build.max_rounds is only for executor claude-code"})
+	e = wantSysError(t, err, "environment", "project_config_invalid", 3)
+	equalList(t, "lines", e.Lines, []string{"line 3: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
 }
 
 // kogen cli/readiness/readiness.go reads what it can of an invalid file and lists the model
