@@ -178,6 +178,7 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.Config.Fix` | kogen-verification, kogen-shaping, kogen-build | `kogen-verification/verify/run.go`, `kogen-shaping/shape/init.go` | `TestConfigPathAndLoad`, `TestNamedCommandsOrder`, `TestTemplateAndRenderConfig` |
 | `project.Config.Models` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-build/build/lineup_test.go` | `TestConfigPathAndLoad`, `TestExecutorRoleLineup`, `TestReadableConfigAndModelRoles`, `TestTemplateAndRenderConfig` |
 | `project.Config.NamedCommands` | kogen-verification | `kogen-verification/verify/readiness.go` | `TestNamedCommandsOrder` |
+| `project.Config.ProtectDiagnostics` / `project.ProtectDiagnostic` | config-check consumers | serialized loaded Config: advisory `Entry`, `Severity`, `Message`; refreshed by `Protected` | `TestProtectDiagnosticsContract` |
 | `project.Config.Protect` | kogen-shaping, kogen-build | `kogen-shaping/shape/init.go` | `TestBaselineOrderAndProtectGlobs`, `TestConfigPathAndLoad`, `TestReadableConfigAndModelRoles`, `TestTemplateAndRenderConfig` |
 | `project.Config.ReviewMaterial` | kogen-build | `kogen-build/build/k_revod_gate_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.Config.Setup` | kogen-verification, kogen-shaping, kogen-build | `kogen-verification/verify/run.go`, `kogen-shaping/shape/init.go` | `TestConfigPathAndLoad`, `TestNamedCommandsOrder`, `TestTemplateAndRenderConfig` |

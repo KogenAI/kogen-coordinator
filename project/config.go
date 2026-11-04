@@ -79,11 +79,17 @@ type Config struct {
 	Checks             []Check
 	Acceptance         *Acceptance // nil when neither run nor steps_dir is set
 	Protect            []string
+	ProtectDiagnostics []ProtectDiagnostic
 	Models             map[string]Role // "shape", "build", "review"; defaults where the file says nothing
 	ShapeWorkers       Workers
 	ShapeAudit         Audit
 	ShapeDecisionCheck DecisionCheck
 	ReviewMaterial     ReviewMaterial
+}
+
+// ProtectDiagnostic describes an advisory finding for a protect entry.
+type ProtectDiagnostic struct {
+	Entry, Severity, Message string
 }
 
 // ModelRoles lists the model roles in the order the template writes them.
@@ -132,7 +138,12 @@ func LoadConfig(root string) (*Config, error) {
 	if err != nil {
 		return nil, sys.Fail("environment", "not_initialized", root+" has no .kogen/project.yaml; run kogen init", 3)
 	}
-	return ParseConfig(string(b), file)
+	cfg, err := ParseConfig(string(b), file)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = Protected(root, cfg)
+	return cfg, nil
 }
 
 // ParseConfig validates configuration text; file names it in errors.

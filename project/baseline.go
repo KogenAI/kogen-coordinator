@@ -74,6 +74,7 @@ func Baseline(root, slug string, cfg *Config) ([]string, error) {
 // Protected lists the files matching `protect` (paths, folders or globs) among the tracked and the
 // not-ignored untracked files, sorted and without duplicates.
 func Protected(root string, cfg *Config) ([]string, error) {
+	cfg.ProtectDiagnostics = nil
 	if len(cfg.Protect) == 0 {
 		return nil, nil
 	}
@@ -92,13 +93,39 @@ func Protected(root string, cfg *Config) ([]string, error) {
 		}
 	}
 	var matched []string
-	for _, pat := range cfg.Protect {
-		pat = strings.TrimRight(pat, "/")
+	for _, entry := range cfg.Protect {
+		pat := strings.TrimRight(entry, "/")
 		re := globRegexp(pat)
+		exists, literal := false, false
 		for _, f := range files {
 			if re.MatchString(f) || strings.HasPrefix(f, pat+"/") {
 				matched = append(matched, f)
+				if info, err := os.Stat(filepath.Join(root, f)); err == nil && !info.IsDir() {
+					exists = true
+					if f == entry && !strings.ContainsAny(entry, "*?") {
+						literal = true
+					}
+				}
 			}
+		}
+		var categories []string
+		if !literal && strings.Contains(entry, "[") {
+			categories = append(categories, "character classes")
+		}
+		if !literal && strings.Contains(entry, "{") {
+			categories = append(categories, "brace alternatives")
+		}
+		if strings.HasPrefix(entry, "!") {
+			categories = append(categories, "leading negation")
+		}
+		if strings.Contains(entry, `\`) {
+			categories = append(categories, "backslash escapes")
+		}
+		if len(categories) > 0 {
+			cfg.ProtectDiagnostics = append(cfg.ProtectDiagnostics, ProtectDiagnostic{entry, "lint", fmt.Sprintf("%s: unsupported %s; supported forms are **/, **, * and ?", entry, strings.Join(categories, ", "))})
+		}
+		if !exists {
+			cfg.ProtectDiagnostics = append(cfg.ProtectDiagnostics, ProtectDiagnostic{entry, "warning", fmt.Sprintf("%s matches no file", entry)})
 		}
 	}
 	matched = uniqStrings(matched)

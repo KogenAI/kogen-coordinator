@@ -70,3 +70,16 @@ For inquiries, contact contact@kogen.dev.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## Protect diagnostics
+
+Config-check consumers can serialize the `project.LoadConfig(root)` result and read its
+`ProtectDiagnostics` array. Each advisory record has `Entry`, `Severity` (`lint` or
+`warning`), and `Message` JSON fields. Findings are in protect-entry order, lint before
+warning. Unsupported character classes, brace alternatives, leading negation and backslash
+escapes are not expanded; supported anchored forms are `**/`, `**`, `*`, and `?`, as well
+as literal paths and trailing-slash folders. Exact existing literal bracket or brace files
+are exempt from that syntax lint. Warnings identify entries matching no existing tracked or
+untracked-not-ignored file. `project.Protected` refreshes the findings on its Config;
+`project.ParseConfig` does not consult Git or the filesystem. Findings do not change protection
+membership or reject the configuration.

@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -289,5 +290,55 @@ func TestDetectAndAcceptanceCommand(t *testing.T) {
 	}
 	for _, c := range runners {
 		equal(t, "acceptance command", project.AcceptanceCommand("features/steps", c.runner), c.want)
+	}
+}
+
+// Config-check consumers receive advisory protect findings in the loaded Config JSON.
+func TestProtectDiagnosticsContract(t *testing.T) {
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s: %v", out, err)
+	}
+	writeFile(t, root, project.ConfigPath, "version: 1\nprotect: ['!src/[ab]{x}\\file']\n")
+	cfg, err := project.LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ProtectDiagnostics []struct{ Entry, Severity, Message string }
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ProtectDiagnostics) != 2 {
+		t.Fatalf("diagnostics: %s", b)
+	}
+	lint, warning := result.ProtectDiagnostics[0], result.ProtectDiagnostics[1]
+	if lint.Entry != `!src/[ab]{x}\file` || lint.Severity != "lint" || warning.Entry != lint.Entry || warning.Severity != "warning" {
+		t.Fatalf("diagnostics: %s", b)
+	}
+	for _, part := range []string{lint.Entry, "character classes", "brace alternatives", "leading negation", "backslash escapes", "**/", "**", "*", "?"} {
+		if !strings.Contains(lint.Message, part) {
+			t.Errorf("lint %q lacks %q", lint.Message, part)
+		}
+	}
+	if !strings.Contains(warning.Message, "matches no file") {
+		t.Fatalf("warning: %q", warning.Message)
+	}
+	parsed, err := project.ParseConfig("version: 1\nprotect: ['!src/[ab]{x}\\file']\n", "config.yaml")
+	if err != nil || len(parsed.ProtectDiagnostics) != 0 {
+		t.Fatalf("ParseConfig = %+v, %v", parsed, err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := project.Protected(root, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(cfg.ProtectDiagnostics, []project.ProtectDiagnostic{{Entry: lint.Entry, Severity: lint.Severity, Message: lint.Message}, {Entry: warning.Entry, Severity: warning.Severity, Message: warning.Message}}) {
+			t.Fatalf("refreshed: %+v", cfg.ProtectDiagnostics)
+		}
 	}
 }
