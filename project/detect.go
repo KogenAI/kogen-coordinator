@@ -35,6 +35,7 @@ func Detect(files map[string]string, tracked []string) Detected {
 	}
 	detectGo(&d, files, tracked)
 	detectBundler(&d, files, tracked)
+	detectCargo(&d, files, tracked)
 	return d
 }
 
@@ -160,6 +161,33 @@ func detectBundler(d *Detected, files map[string]string, tracked []string) {
 			name = "bundler-test"
 		}
 		d.Checks = append(d.Checks, Check{name, "bin/rails test"})
+	}
+}
+
+// detectCargo recognises a Rust project by a tracked root Cargo.toml with its text in files. The lock
+// and config files count only through tracked.
+func detectCargo(d *Detected, files map[string]string, tracked []string) {
+	if _, ok := files["Cargo.toml"]; !ok || !slices.Contains(tracked, "Cargo.toml") {
+		return
+	}
+	if slices.Contains(tracked, "Cargo.lock") {
+		d.Setup = append(d.Setup, "cargo fetch --locked")
+	} else {
+		d.Setup = append(d.Setup, "cargo fetch")
+	}
+	d.Fix = append(d.Fix, "cargo fmt")
+	d.Checks = append(d.Checks,
+		Check{"cargo-format", "cargo fmt --check"},
+		Check{"cargo-build", "cargo build --all-targets"},
+		Check{"cargo-test", "cargo test"},
+	)
+	if slices.Contains(tracked, "clippy.toml") || slices.Contains(tracked, ".clippy.toml") {
+		d.Checks = append(d.Checks, Check{"cargo-clippy", "cargo clippy --all-targets -- -D warnings"})
+	}
+	for _, protected := range []string{"rustfmt.toml", ".rustfmt.toml", "clippy.toml"} {
+		if slices.Contains(tracked, protected) {
+			d.Protect = append(d.Protect, protected)
+		}
 	}
 }
 

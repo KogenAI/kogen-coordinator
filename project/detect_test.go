@@ -238,6 +238,40 @@ func TestDetectBundler(t *testing.T) {
 	}
 }
 
+func TestDetectCargo(t *testing.T) {
+	cargoChecks := []Check{{"cargo-format", "cargo fmt --check"}, {"cargo-build", "cargo build --all-targets"}, {"cargo-test", "cargo test"}}
+	clippy := Check{"cargo-clippy", "cargo clippy --all-targets -- -D warnings"}
+	cargo := map[string]string{"Cargo.toml": "[package]"}
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"locked", map[string]string{"Cargo.toml": "[package]", "Cargo.lock": ""}, []string{"Cargo.toml", "Cargo.lock"}, Detected{Setup: []string{"cargo fetch --locked"}, Fix: []string{"cargo fmt"}, Checks: cargoChecks}},
+		{"no lock", cargo, []string{"Cargo.toml"}, Detected{Setup: []string{"cargo fetch"}, Fix: []string{"cargo fmt"}, Checks: cargoChecks}},
+		{"lock only in files", map[string]string{"Cargo.toml": "", "Cargo.lock": ""}, []string{"Cargo.toml"}, Detected{Setup: []string{"cargo fetch"}, Fix: []string{"cargo fmt"}, Checks: cargoChecks}},
+		{"untracked manifest", cargo, []string{"Cargo.lock", "rustfmt.toml", "clippy.toml"}, Detected{}},
+		{"nothing tracked", cargo, nil, Detected{}},
+		{"manifest without text", nil, []string{"Cargo.toml", "Cargo.lock"}, Detected{}},
+		{"nested manifest", map[string]string{"crates/app/Cargo.toml": ""}, []string{"crates/app/Cargo.toml", "Cargo.lock"}, Detected{}},
+		{"clippy.toml", cargo, []string{"Cargo.toml", "clippy.toml"}, Detected{Setup: []string{"cargo fetch"}, Fix: []string{"cargo fmt"}, Checks: append(slices.Clone(cargoChecks), clippy), Protect: []string{"clippy.toml"}}},
+		{"hidden configs", cargo, []string{"Cargo.toml", ".rustfmt.toml", ".clippy.toml"}, Detected{Setup: []string{"cargo fetch"}, Fix: []string{"cargo fmt"}, Checks: append(slices.Clone(cargoChecks), clippy), Protect: []string{".rustfmt.toml"}}},
+		{"all configs", cargo, []string{".clippy.toml", "clippy.toml", ".rustfmt.toml", "rustfmt.toml", "Cargo.lock", "Cargo.toml"}, Detected{Setup: []string{"cargo fetch --locked"}, Fix: []string{"cargo fmt"}, Checks: append(slices.Clone(cargoChecks), clippy), Protect: []string{"rustfmt.toml", ".rustfmt.toml", "clippy.toml"}}},
+		{"untracked configs", map[string]string{"Cargo.toml": "", "rustfmt.toml": "", "clippy.toml": ""}, []string{"Cargo.toml"}, Detected{Setup: []string{"cargo fetch"}, Fix: []string{"cargo fmt"}, Checks: cargoChecks}},
+		{"go", map[string]string{"go.mod": "module x", "Cargo.toml": ""}, []string{"go.mod", "Cargo.toml", "Cargo.lock"}, Detected{Setup: []string{"go mod download", "cargo fetch --locked"}, Fix: []string{"cargo fmt"}, Checks: append([]Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}}, cargoChecks...)}},
+		{"mix", map[string]string{"mix.exs": "", "Cargo.toml": ""}, []string{"mix.exs", ".formatter.exs", "Cargo.toml", "rustfmt.toml"}, Detected{Setup: []string{"mix deps.get", "cargo fetch"}, Fix: []string{"mix format", "cargo fmt"}, Checks: append([]Check{{"format", "mix format --check-formatted"}, {"compile", "mix compile --warnings-as-errors"}, {"test", "mix test"}}, cargoChecks...), Protect: []string{".formatter.exs", "rustfmt.toml"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetectPackageManagers(t *testing.T) {
 	pkg := `{"scripts":{"check":"custom","typecheck":"tsc","lint":"eslint .","test":"jest"}}`
 	files := map[string]string{"package.json": pkg, "yarn.lock": "", "pnpm-lock.yaml": "", "package-lock.json": ""}
