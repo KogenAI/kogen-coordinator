@@ -4,6 +4,8 @@ This package is the contract of kogen-coordinator with its consumers: kogen, kog
 
 An intended interface change edits this contract together with paired consumer items.
 
+`TestBaselineContractGolden` pins the ordered `project.Baseline` producer list in `testdata/baseline.json`, before consumers derive bytes and digests from it. A deliberate Baseline-list change must update this golden in the same commit, and the commit message must name the baseline change as an expand step so delivery's consumer gate can see it. This is a human maintenance obligation, not an automated guarantee of delivery classification. Introducing the golden itself does not expand the baseline.
+
 Run it with the rest of the module, or alone:
 
 ```sh
@@ -14,7 +16,7 @@ go test -race -count=1 ./contract/...
 
 - The cases are copied and adapted from the consumers' existing tests that exercise kogen-coordinator. A case that has no consumer test is adapted from the consumer code that uses the member (for example `git.Materialized.Mutations` in kogen-verification `verify/run.go` and `git.UnsetPrefix` in kogen-shaping `shape/init.go`).
 - The fixtures are synthetic only: `t.TempDir()` roots, Git repositories and project files written by the test, and `sys.NewWith(env, dir)` sessions from `kogen-loop/sys`. Git runs with `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, no inherited `GIT_*` or `KOGEN_*` variable, a `HOME` of its own, the identity `Fixture <fixture@example.invalid>`, its own empty hooks folder (`core.hooksPath`) and `commit.gpgsign false`, as `git/helper_test.go` does. `TestMain` sets this up for the whole process, because the project functions run Git with the process environment.
-- The suite imports only the standard library, `project`, `git`, `durable` and `route` of kogen-coordinator and `kogen-loop/sys`. It does not read kogen-coordinator's own sources or goldens, runs no model, uses no network, no fixed port and no shared path, has no `t.Skip`, no sleep and no build constraint, and passes with `-count=1`, `-trimpath` and `-race`.
+- The suite imports only the standard library, `project`, `git`, `durable` and `route` of kogen-coordinator and `kogen-loop/sys`. It does not read kogen-coordinator's own sources or project/testdata goldens; the contract package's own baseline golden is read alongside its synthetic inputs. It runs no model, uses no network, no fixed port and no shared path, has no `t.Skip`, no sleep and no build constraint, and passes with `-count=1`, `-trimpath` and `-race`.
 
 ## Source commits
 

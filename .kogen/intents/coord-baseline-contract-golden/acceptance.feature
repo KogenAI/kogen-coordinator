@@ -1,0 +1,34 @@
+Feature: Pin the coordinator baseline contract
+  Scenario: Current lists are stable and a targeted mutation is visible
+    Then coord-baseline-contract-golden: the checked-in golden and contract comparisons satisfy:
+      """
+      {
+        "basic": [
+          ".kogen/intents/fixture/intent.md",
+          ".kogen/project.yaml",
+          ".kogen/models.yaml"
+        ],
+        "acceptance": [
+          ".kogen/intents/fixture/intent.md",
+          ".kogen/intents/fixture/acceptance.feature",
+          "features/steps/z.js",
+          "features/steps/a.js",
+          ".kogen/intents/fixture/b.txt",
+          ".kogen/intents/fixture/notes.md",
+          ".kogen/project.yaml",
+          ".kogen/models.yaml"
+        ],
+        "protect": [
+          ".kogen/intents/fixture/intent.md",
+          ".kogen/project.yaml",
+          ".kogen/models.yaml",
+          "guard/a/deep.txt",
+          "guard/z.txt"
+        ],
+        "team": [
+          ".kogen/intents/fixture/intent.md",
+          ".kogen/project.yaml",
+          ".kogen/models.yaml"
+        ]
+      }
+      """
