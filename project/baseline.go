@@ -149,8 +149,16 @@ func globRegexp(pat string) *regexp.Regexp {
 }
 
 // Hash is the SHA-256 over `<path>\0<sha256 of the file's bytes>\n` for each baseline file in
-// path order (`missing` for a file that cannot be read), as lowercase hex: the approval hash.
+// path order (`missing` for absent files, `unreadable` for other read errors), as lowercase hex.
 func Hash(root string, paths []string) string {
+	hash, _ := HashWithUnreadable(root, paths)
+	return hash
+}
+
+// HashWithUnreadable returns the approval hash and the sorted paths with non-absence read errors.
+// Duplicate paths contribute and appear once per occurrence.
+func HashWithUnreadable(root string, paths []string) (string, []string) {
+	var unreadable []string
 	sorted := slices.Clone(paths)
 	slices.Sort(sorted)
 	var buf bytes.Buffer
@@ -159,11 +167,14 @@ func Hash(root string, paths []string) string {
 		if b, err := os.ReadFile(filepath.Join(root, p)); err == nil {
 			sum := sha256.Sum256(b)
 			digest = hex.EncodeToString(sum[:])
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			digest = "unreadable"
+			unreadable = append(unreadable, p)
 		}
 		buf.WriteString(p + "\x00" + digest + "\n")
 	}
 	sum := sha256.Sum256(buf.Bytes())
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), unreadable
 }
 
 // Approval is `.kogen/local/approvals/<slug>.json` (AUT-2).

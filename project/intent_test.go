@@ -218,11 +218,11 @@ func TestHashFormat(t *testing.T) {
 	if Hash(root, nil) != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
 		t.Errorf("empty hash %q", Hash(root, nil))
 	}
-	// A folder cannot be read as a file, so it counts as missing.
+	// A folder cannot be read as a file, so it counts as unreadable.
 	writeFile(t, root, "dir/inner.txt", "x")
-	sum := sha256.Sum256([]byte("dir\x00missing\n"))
+	sum := sha256.Sum256([]byte("dir\x00unreadable\n"))
 	if Hash(root, []string{"dir"}) != hex.EncodeToString(sum[:]) {
-		t.Error("a folder is not hashed as missing")
+		t.Error("a folder is not hashed as unreadable")
 	}
 	fileSum := sha256.Sum256([]byte("hello"))
 	line := "a.txt\x00" + hex.EncodeToString(fileSum[:]) + "\n"
@@ -987,4 +987,47 @@ func TestCheckIntentNameDiagnostics(t *testing.T) {
 	check("Pat Owner adds retry", "not a feature\n", "parse", []string{"acceptance.feature line 1: expected Feature:, got: not a feature", diagnostic})
 	setName("--unset", "user.name")
 	check("Pat Owner adds retry", goodFeature, "", nil)
+}
+
+func TestHashWithUnreadable(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "readable", "hello")
+	writeFile(t, root, "permission", "secret")
+	if err := os.Chmod(filepath.Join(root, "permission"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, "permission"), 0600) })
+	if err := os.Mkdir(filepath.Join(root, "zdir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "adir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"zdir", "readable", "permission", "absent", "adir", "adir"}
+	permission := "unreadable"
+	expectedUnreadable := []string{"adir", "adir"}
+	if b, err := os.ReadFile(filepath.Join(root, "permission")); err == nil {
+		sum := sha256.Sum256(b)
+		permission = hex.EncodeToString(sum[:])
+	} else {
+		expectedUnreadable = append(expectedUnreadable, "permission")
+	}
+	expectedUnreadable = append(expectedUnreadable, "zdir")
+	fileSum := sha256.Sum256([]byte("hello"))
+	frame := "absent\x00missing\nadir\x00unreadable\nadir\x00unreadable\npermission\x00" + permission + "\nreadable\x00" + hex.EncodeToString(fileSum[:]) + "\nzdir\x00unreadable\n"
+	sum := sha256.Sum256([]byte(frame))
+	got, unreadable := HashWithUnreadable(root, paths)
+	if want := hex.EncodeToString(sum[:]); got != want {
+		t.Errorf("hash = %s, want %s", got, want)
+	}
+	if !slices.Equal(unreadable, expectedUnreadable) {
+		t.Errorf("unreadable = %v, want %v", unreadable, expectedUnreadable)
+	}
+	if got != Hash(root, paths) {
+		t.Error("Hash differs from HashWithUnreadable")
+	}
+	_, unreadable = HashWithUnreadable(root, []string{"readable", "absent"})
+	if len(unreadable) != 0 {
+		t.Errorf("unexpected unreadable paths: %v", unreadable)
+	}
 }
