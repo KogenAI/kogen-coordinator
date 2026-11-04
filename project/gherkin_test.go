@@ -1,6 +1,7 @@
 package project
 
 import (
+	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -185,5 +186,32 @@ func TestGherkinRules(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestGherkinIgnoresOneLeadingBOM(t *testing.T) {
+	const bom = "\uFEFF"
+	text := "Feature: x\n  Scenario: one\n    Given a start\n    Then an end\n"
+	want, err := ParseGherkin(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseGherkin(bom + text)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("with BOM: %+v, %v; want %+v", got, err, want)
+	}
+	for _, c := range []struct{ text, msg string }{
+		{"Scenario: one\n  Then an end", "line 1: expected Feature:, got: Scenario: one"},
+		{"Feature: x\n  Scenario: one\n    Given a start\n      ```\n      never closed", "line 4: the doc string is not closed"},
+		{bom + "Feature: x\n  Scenario: one\n    Then an end", "line 1: expected Feature:, got: " + bom + "Feature: x"},
+	} {
+		_, err := ParseGherkin(bom + c.text)
+		if err == nil || err.Error() != c.msg {
+			t.Errorf("ParseGherkin(BOM+%q) error %v, want %q", c.text, err, c.msg)
+		}
+	}
+	mid, err := ParseGherkin("Feature: x\n  Scenario: on" + bom + "e\n    Then an end")
+	if err != nil || mid[0].Name != "on"+bom+"e" {
+		t.Fatalf("middle BOM: %+v, %v", mid, err)
 	}
 }

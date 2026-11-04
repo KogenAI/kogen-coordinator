@@ -114,6 +114,7 @@ func ParseGherkin(text string) (scenarios []Scenario, err error) {
 		}
 	}()
 	st := &gState{}
+	text = strings.TrimPrefix(text, "\uFEFF")
 	for i, raw := range strings.Split(text, "\n") {
 		st.line(raw, i+1)
 	}

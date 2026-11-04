@@ -100,7 +100,7 @@ func ReadIntent(root, slug string, overlay map[string][]byte) (*Intent, error) {
 }
 
 func parseIntent(root, slug, text string, overlay map[string][]byte) *Intent {
-	lines := strings.Split(text, "\n")
+	lines := strings.Split(strings.TrimPrefix(text, "\uFEFF"), "\n")
 	i := &Intent{Root: root, Slug: slug, Text: text, Overlay: overlay}
 	if v, ok := firstWithPrefix(lines, "# "); ok {
 		i.Title = strings.TrimSpace(v)

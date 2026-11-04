@@ -62,6 +62,7 @@ func trimRightSpace(s string) string { return strings.TrimRightFunc(s, unicode.I
 // parseYAML returns the document's root node, or the problems that stop it.
 func parseYAML(text string) (node *yamlNode, problems []problem) {
 	var lines []yamlLine
+	text = strings.TrimPrefix(text, "\uFEFF")
 	for i, raw := range strings.Split(text, "\n") {
 		content := stripComment(trimRightSpace(raw))
 		if strings.TrimSpace(content) == "" {

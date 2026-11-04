@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1091,5 +1092,28 @@ func TestHashStreamsFilesOfChunkBoundaryLengths(t *testing.T) {
 		if got != hex.EncodeToString(want[:]) || len(unreadable) != 0 {
 			t.Errorf("%d bytes: hash %s unreadable %v, want %x", n, got, unreadable, want)
 		}
+	}
+}
+
+func TestParseIntentIgnoresOneLeadingBOM(t *testing.T) {
+	const bom = "\uFEFF"
+	text := "# Title\nSlug: demo\nModel: not applicable — pure parsing\nAcceptance:\n- a.feature\n\n## Decisions\n- Keep it (source: request)\n## Tests\n- t (unit)\n## Feasibility\n- none\n"
+	want := parseIntent("/r", "demo", text, nil)
+	got := parseIntent("/r", "demo", bom+text, nil)
+	if got.Text != bom+text {
+		t.Errorf("Text = %q, want the text as written", got.Text)
+	}
+	got.Text = want.Text
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("with BOM: %+v, want %+v", got, want)
+	}
+	if got.Title != "Title" {
+		t.Errorf("Title = %q", got.Title)
+	}
+	if i := parseIntent("/r", "demo", bom+bom+text, nil); i.Title != "" {
+		t.Errorf("double BOM Title = %q, want empty", i.Title)
+	}
+	if i := parseIntent("/r", "demo", "# Ti"+bom+"tle\n", nil); i.Title != "Ti"+bom+"tle" {
+		t.Errorf("middle BOM Title = %q", i.Title)
 	}
 }

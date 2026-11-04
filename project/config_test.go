@@ -720,3 +720,23 @@ func TestLegacyNoProgressKeysAreNotSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConfigIgnoresOneLeadingBOM(t *testing.T) {
+	const bom = "\uFEFF"
+	text := "version: 1\ncommands:\n  setup: []\n  fix:\n    - 'gofmt -w .'\n"
+	want := mustParse(t, text)
+	if got := mustParse(t, bom+text); !reflect.DeepEqual(got, want) {
+		t.Errorf("with BOM: %+v, want %+v", got, want)
+	}
+	se := configError(t, bom+"version: 1\ncommands:\n  setup: []\nsurprise: true\n", "/project/.kogen/project.yaml")
+	if !slices.Equal(se.Lines, []string{"line 4: unknown key surprise"}) {
+		t.Errorf("lines = %q", se.Lines)
+	}
+	if se := configError(t, bom+bom+text, "/project/.kogen/project.yaml"); !strings.Contains(strings.Join(se.Lines, "\n"), "line 1") {
+		t.Errorf("double BOM lines = %q", se.Lines)
+	}
+	fix := mustParse(t, "version: 1\ncommands:\n  fix:\n    - 'gofmt"+bom+" -w .'\n")
+	if fix.Fix[0] != "gofmt"+bom+" -w ." {
+		t.Errorf("middle BOM fix = %q", fix.Fix)
+	}
+}
