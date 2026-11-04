@@ -31,6 +31,10 @@ The former `models.<role>.max_rounds` setting is rejected in all three files. An
 executor's own round limit caps a role; when it supplies none, 6 caps a review role.
 `Role.MaxRounds` remains available for consumers and is zero for loaded roles.
 
+The former `shape_workers`, `shape_audit`, `shape_decision_check` and `review_material` settings are
+ignored; `Config` holds their fixed defaults (workers off, audit off, decision check off, review
+material `parts`).
+
 The approval baseline includes the team path immediately after the project configuration, even
 when the team file is absent. The local path is not automatically protected; explicit `protect`
 patterns continue to apply. Thus local-only changes do not affect the ordinary approval hash,

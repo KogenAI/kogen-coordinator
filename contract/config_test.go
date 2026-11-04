@@ -74,22 +74,15 @@ func TestConfigPathAndLoad(t *testing.T) {
 	equal(t, "Acceptance.StepsDir", cfg.Acceptance.StepsDir, "features/steps")
 	equal(t, "AcceptanceConfigured", cfg.AcceptanceConfigured(), true)
 	equalList(t, "Protect", cfg.Protect, []string{".eslintrc", "config/"})
-	equal(t, "ShapeAudit", cfg.ShapeAudit, project.Audit{Enabled: true})
-	equal(t, "ShapeAudit.Enabled", cfg.ShapeAudit.Enabled, true)
-	equal(t, "ShapeDecisionCheck", cfg.ShapeDecisionCheck, project.DecisionCheck{Enabled: true})
-	equal(t, "ShapeDecisionCheck.Enabled", cfg.ShapeDecisionCheck.Enabled, true)
-	equal(t, "ReviewMaterial", cfg.ReviewMaterial, project.ReviewMaterial{Mode: "on_demand"})
-	equal(t, "ReviewMaterial.Mode", cfg.ReviewMaterial.Mode, "on_demand")
+	// The four former options are ignored in the file; the fields hold the fixed values.
+	equal(t, "ShapeAudit", cfg.ShapeAudit, project.Audit{Enabled: false})
+	equal(t, "ShapeDecisionCheck", cfg.ShapeDecisionCheck, project.DecisionCheck{Enabled: false})
+	equal(t, "ReviewMaterial", cfg.ReviewMaterial, project.ReviewMaterial{Mode: "parts"})
 
 	var workers project.Workers = cfg.ShapeWorkers
-	equal(t, "ShapeWorkers.Enabled", workers.Enabled, true)
-	wantRoles := map[string]project.Role{
-		"read":  {Model: "r1", Effort: "low"},
-		"probe": {Model: "p1", Effort: "low"},
-		"draft": {Model: "d1", Effort: "low"},
-	}
-	if !reflect.DeepEqual(workers.Roles, wantRoles) {
-		t.Fatalf("ShapeWorkers.Roles = %+v, want %+v", workers.Roles, wantRoles)
+	equal(t, "ShapeWorkers.Enabled", workers.Enabled, false)
+	if workers.Roles == nil || !reflect.DeepEqual(workers.Roles, map[string]project.Role{}) {
+		t.Fatalf("ShapeWorkers.Roles = %#v, want an empty non-nil map", workers.Roles)
 	}
 
 	var shape project.Role = cfg.Models["shape"]

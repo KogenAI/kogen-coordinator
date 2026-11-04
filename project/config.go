@@ -54,23 +54,27 @@ type Check struct{ Name, Run string }
 // (`commands.acceptance`). Either may be empty while it is not configured.
 type Acceptance struct{ Run, StepsDir string }
 
-// Workers is `shape_workers`: whether the shaper may use workers and their roles
-// ("read", "probe", "draft").
+// Workers was `shape_workers`: whether the shaper may use workers and their roles
+// ("read", "probe", "draft"). The YAML option was removed; Config.ShapeWorkers always holds
+// Workers{Enabled: false, Roles: map[string]Role{}}.
 type Workers struct {
 	Enabled bool
 	Roles   map[string]Role
 }
 
-// Audit is `shape_audit`: whether Shape audits the request before its conversation.
+// Audit was `shape_audit`: whether Shape audits the request before its conversation. The YAML
+// option was removed; Config.ShapeAudit always holds Audit{Enabled: false}.
 type Audit struct{ Enabled bool }
 
-// DecisionCheck is `shape_decision_check`: whether Shape checks each candidate's stated
-// Decisions against the request.
+// DecisionCheck was `shape_decision_check`: whether Shape checks each candidate's stated
+// Decisions against the request. The YAML option was removed; Config.ShapeDecisionCheck always
+// holds DecisionCheck{Enabled: false}.
 type DecisionCheck struct{ Enabled bool }
 
-// ReviewMaterial is `review_material`: how a review that overflows its window reads the
+// ReviewMaterial was `review_material`: how a review that overflows its window reads the
 // pinned source, `parts` (every part must be read) or `on_demand` (a manifest; every part covering
-// a changed hunk must be read, others by id as needed).
+// a changed hunk must be read, others by id as needed). The YAML option was removed;
+// Config.ReviewMaterial always holds ReviewMaterial{Mode: "parts"}.
 type ReviewMaterial struct{ Mode string }
 
 // Config is a validated `.kogen/project.yaml` (SET-8).
@@ -211,14 +215,9 @@ func validateConfig(node *yamlNode) (*Config, []problem) {
 			v.commands(p.node, c)
 		case "protect":
 			c.Protect = v.strings(p.node, "protect")
-		case "shape_workers":
-			c.ShapeWorkers = v.workers(p.node)
-		case "shape_audit":
-			c.ShapeAudit = v.audit(p.node)
-		case "shape_decision_check":
-			c.ShapeDecisionCheck = DecisionCheck(v.enabledOnly(p.node, "shape_decision_check"))
-		case "review_material":
-			c.ReviewMaterial = v.reviewMaterial(p.node)
+		case "shape_workers", "shape_audit", "shape_decision_check", "review_material":
+			// Older project files may retain these removed options. They are ignored: the
+			// configuration always holds their fixed defaults.
 		case "models":
 			c.Models = v.models(p.node)
 		default:
@@ -475,92 +474,6 @@ func modelEffort(node *yamlNode, nonBlank bool) (model, effort string, ok bool) 
 		return "", "", false
 	}
 	return m, e, true
-}
-
-func (v *validator) audit(node *yamlNode) Audit {
-	return Audit(v.enabledOnly(node, "shape_audit"))
-}
-
-// reviewMaterial reads a mapping whose only key is `mode`: parts or on_demand.
-func (v *validator) reviewMaterial(node *yamlNode) ReviewMaterial {
-	m := ReviewMaterial{Mode: "parts"}
-	if node.kind != kindMap {
-		v.add(node.line, "review_material must be a mapping")
-		return m
-	}
-	for _, p := range node.pairs {
-		if p.key != "mode" {
-			v.add(p.line, "unknown key "+p.key)
-			continue
-		}
-		n := p.node
-		if n.kind == kindScalar && !n.null && !n.quoted && (n.text == "parts" || n.text == "on_demand") {
-			m.Mode = n.text
-		} else {
-			v.add(p.line, "review_material.mode must be parts or on_demand")
-		}
-	}
-	return m
-}
-
-// enabledOnly reads a mapping whose only key is the Boolean `enabled`.
-func (v *validator) enabledOnly(node *yamlNode, name string) Audit {
-	var a Audit
-	if node.kind != kindMap {
-		v.add(node.line, name+" must be a mapping")
-		return a
-	}
-	for _, p := range node.pairs {
-		if p.key != "enabled" {
-			v.add(p.line, "unknown key "+p.key)
-			continue
-		}
-		n := p.node
-		if n.kind == kindScalar && !n.null && !n.quoted && (n.text == "true" || n.text == "false") {
-			a.Enabled = n.text == "true"
-		} else {
-			v.add(p.line, name+".enabled must be a Boolean")
-		}
-	}
-	return a
-}
-
-func (v *validator) workers(node *yamlNode) Workers {
-	w := Workers{Roles: map[string]Role{}}
-	if node.kind != kindMap {
-		v.add(node.line, "shape_workers must be a mapping")
-		return w
-	}
-	for _, p := range node.pairs {
-		switch p.key {
-		case "enabled":
-			n := p.node
-			if n.kind == kindScalar && !n.null && !n.quoted && (n.text == "true" || n.text == "false") {
-				w.Enabled = n.text == "true"
-			} else {
-				v.add(p.line, "shape_workers.enabled must be a Boolean")
-			}
-		case "read", "probe", "draft":
-			m, e, ok := modelEffort(p.node, true)
-			if !ok {
-				v.add(p.line, "shape_workers."+p.key+" must be {model, effort} strings")
-				continue
-			}
-			if r, ok := v.roleConfig(p.node.pairs, "shape_workers."+p.key, p.line, m, e); ok {
-				w.Roles[p.key] = r
-			}
-		default:
-			v.add(p.line, "unknown key "+p.key)
-		}
-	}
-	if w.Enabled {
-		for _, role := range []string{"read", "probe", "draft"} {
-			if _, ok := w.Roles[role]; !ok {
-				v.add(node.line, "shape_workers."+role+" requires explicit model and effort")
-			}
-		}
-	}
-	return w
 }
 
 // Providers lists the values a role's provider may name, in the order messages list them.

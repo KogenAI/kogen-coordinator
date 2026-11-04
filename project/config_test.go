@@ -285,23 +285,6 @@ func TestParseConfigMoreRules(t *testing.T) {
 		{"models missing effort", "version: 1\nmodels:\n  build: {model: m}\n", []string{"line 3: models.build must be {model, effort}"}},
 		{"models extra key", "version: 1\nmodels:\n  build: {model: m, effort: e, extra: 1}\n", []string{"line 3: models.build must be {model, effort}"}},
 		{"models number model", "version: 1\nmodels:\n  build: {model: 1, effort: high}\n", []string{"line 3: models.build must be {model, effort}"}},
-		{"audit scalar", "version: 1\nshape_audit: x\n", []string{"line 2: shape_audit must be a mapping"}},
-		{"audit unknown key", "version: 1\nshape_audit:\n  extra: 1\n", []string{"line 3: unknown key extra"}},
-		{"audit enabled not boolean", "version: 1\nshape_audit:\n  enabled: 'true'\n", []string{"line 3: shape_audit.enabled must be a Boolean"}},
-		{"decision check scalar", "version: 1\nshape_decision_check: x\n", []string{"line 2: shape_decision_check must be a mapping"}},
-		{"decision check unknown key", "version: 1\nshape_decision_check:\n  extra: 1\n", []string{"line 3: unknown key extra"}},
-		{"decision check enabled not boolean", "version: 1\nshape_decision_check:\n  enabled: 'true'\n", []string{"line 3: shape_decision_check.enabled must be a Boolean"}},
-		{"review material scalar", "version: 1\nreview_material: x\n", []string{"line 2: review_material must be a mapping"}},
-		{"review material unknown key", "version: 1\nreview_material:\n  extra: 1\n", []string{"line 3: unknown key extra"}},
-		{"review material bad mode", "version: 1\nreview_material:\n  mode: sometimes\n", []string{"line 3: review_material.mode must be parts or on_demand"}},
-		{"review material quoted mode", "version: 1\nreview_material:\n  mode: 'parts'\n", []string{"line 3: review_material.mode must be parts or on_demand"}},
-		{"workers scalar", "version: 1\nshape_workers: x\n", []string{"line 2: shape_workers must be a mapping"}},
-		{"workers unknown key", "version: 1\nshape_workers:\n  extra: 1\n", []string{"line 3: unknown key extra"}},
-		{"workers enabled not boolean", "version: 1\nshape_workers:\n  enabled: 'true'\n", []string{"line 3: shape_workers.enabled must be a Boolean"}},
-		{"workers enabled yes", "version: 1\nshape_workers:\n  enabled: yes\n", []string{"line 3: shape_workers.enabled must be a Boolean"}},
-		{"workers blank model", "version: 1\nshape_workers:\n  read: {model: ' ', effort: b}\n", []string{"line 3: shape_workers.read must be {model, effort} strings"}},
-		{"workers not a map", "version: 1\nshape_workers:\n  draft: [x]\n", []string{"line 3: shape_workers.draft must be {model, effort} strings"}},
-		{"workers enabled lacks roles", "version: 1\nshape_workers:\n  enabled: true\n  read: {model: a, effort: b}\n", []string{"line 3: shape_workers.draft requires explicit model and effort", "line 3: shape_workers.probe requires explicit model and effort"}},
 		{"problems sorted by line then text", "version: 1\nprotect: x\ncommands:\n  setup: y\nzzz: 1\naaa: 2\n", []string{"line 2: protect must be a list", "line 4: commands.setup must be a list", "line 5: unknown key zzz", "line 6: unknown key aaa"}},
 	}
 	for _, c := range cases {
@@ -314,58 +297,50 @@ func TestParseConfigMoreRules(t *testing.T) {
 	}
 }
 
-func TestParseConfigAudit(t *testing.T) {
-	if mustParse(t, "version: 1\n").ShapeAudit.Enabled {
-		t.Error("shape_audit defaults on")
-	}
-	if !mustParse(t, "version: 1\nshape_audit:\n  enabled: true\n").ShapeAudit.Enabled {
-		t.Error("shape_audit.enabled: true is off")
-	}
-}
-
-func TestParseConfigDecisionCheck(t *testing.T) {
-	if mustParse(t, "version: 1\n").ShapeDecisionCheck.Enabled {
-		t.Error("shape_decision_check defaults on")
-	}
-	if !mustParse(t, "version: 1\nshape_decision_check:\n  enabled: true\n").ShapeDecisionCheck.Enabled {
-		t.Error("shape_decision_check.enabled: true is off")
-	}
-}
-
-func TestParseConfigReviewMaterial(t *testing.T) {
-	for text, want := range map[string]string{
-		"version: 1\n": "parts",
-		"version: 1\nreview_material:\n  mode: parts\n":     "parts",
-		"version: 1\nreview_material:\n  mode: on_demand\n": "on_demand",
-	} {
-		if got := mustParse(t, text).ReviewMaterial.Mode; got != want {
-			t.Errorf("%q: mode %q, want %q", text, got, want)
-		}
-	}
-}
-
-func TestParseConfigWorkers(t *testing.T) {
-	cfg := mustParse(t, `version: 1
+func TestParseConfigRemovedOptionsAreIgnored(t *testing.T) {
+	// shape_workers, shape_audit, shape_decision_check and review_material were removed: the
+	// keys are read and ignored, whatever their value, and Config holds the fixed defaults.
+	for name, text := range map[string]string{
+		"non-default values": `version: 1
 shape_workers:
   enabled: true
   read: {model: a, effort: b}
   probe: {model: a, effort: b, provider: chatgpt}
   draft: {model: grok-4.7, effort: low, provider: supergrok}
-`)
-	want := Workers{Enabled: true, Roles: map[string]Role{
-		"read":  {Model: "a", Effort: "b"},
-		"probe": {Provider: "chatgpt", Model: "a", Effort: "b"},
-		"draft": {Provider: "supergrok", Model: "grok-4.7", Effort: "low"},
-	}}
-	if !reflect.DeepEqual(cfg.ShapeWorkers, want) {
-		t.Errorf("workers %+v", cfg.ShapeWorkers)
-	}
-	off := mustParse(t, "version: 1\nshape_workers:\n  enabled: false\n  read: {model: a, effort: b}\n")
-	if off.ShapeWorkers.Enabled || len(off.ShapeWorkers.Roles) != 1 {
-		t.Errorf("disabled workers %+v", off.ShapeWorkers)
-	}
-	if def := mustParse(t, "version: 1\n"); def.ShapeWorkers.Enabled || len(def.ShapeWorkers.Roles) != 0 || len(def.Models) != 3 {
-		t.Errorf("defaults %+v", def)
+shape_audit:
+  enabled: true
+shape_decision_check:
+  enabled: true
+review_material:
+  mode: on_demand
+`,
+		"malformed values": `version: 1
+shape_workers: x
+shape_audit:
+  enabled: 'true'
+shape_decision_check:
+  extra: 1
+review_material:
+  mode: sometimes
+`,
+		"absent": "version: 1\n",
+	} {
+		cfg := mustParse(t, text)
+		if want := (Workers{Enabled: false, Roles: map[string]Role{}}); !reflect.DeepEqual(cfg.ShapeWorkers, want) {
+			t.Errorf("%s: ShapeWorkers %#v", name, cfg.ShapeWorkers)
+		}
+		if cfg.ShapeAudit != (Audit{Enabled: false}) {
+			t.Errorf("%s: ShapeAudit %+v", name, cfg.ShapeAudit)
+		}
+		if cfg.ShapeDecisionCheck != (DecisionCheck{Enabled: false}) {
+			t.Errorf("%s: ShapeDecisionCheck %+v", name, cfg.ShapeDecisionCheck)
+		}
+		if cfg.ReviewMaterial != (ReviewMaterial{Mode: "parts"}) {
+			t.Errorf("%s: ReviewMaterial %+v", name, cfg.ReviewMaterial)
+		}
+		if len(cfg.Models) != 3 {
+			t.Errorf("%s: models %+v", name, cfg.Models)
+		}
 	}
 }
 
@@ -438,94 +413,83 @@ func TestParseConfigOldConfig(t *testing.T) {
 
 func TestProviderSelections(t *testing.T) {
 	// ExUnit: provider selections preserve omission and validate every role and effort
-	for _, section := range []string{"models", "shape_workers"} {
-		roles := []string{"shape", "build", "review"}
-		if section == "shape_workers" {
-			roles = []string{"read", "probe", "draft"}
+	const section = "models"
+	for _, role := range []string{"shape", "build", "review"} {
+		parse := func(fields string) (Role, *sys.Error) {
+			text := "version: 1\n" + section + ":\n  " + role + ": {" + fields + "}\n"
+			cfg, err := ParseConfig(text, "/project/.kogen/project.yaml")
+			if err != nil {
+				se, _ := sys.AsError(err)
+				return Role{}, se
+			}
+			return cfg.Models[role], nil
 		}
-		for _, role := range roles {
-			parse := func(fields string) (Role, *sys.Error) {
-				text := "version: 1\n" + section + ":\n  " + role + ": {" + fields + "}\n"
-				cfg, err := ParseConfig(text, "/project/.kogen/project.yaml")
-				if err != nil {
-					se, _ := sys.AsError(err)
-					return Role{}, se
-				}
-				if section == "models" {
-					return cfg.Models[role], nil
-				}
-				return cfg.ShapeWorkers.Roles[role], nil
+		if r, _ := parse("model: fixture, effort: arbitrary"); r != (Role{Model: "fixture", Effort: "arbitrary"}) {
+			t.Errorf("%s.%s without provider: %+v", section, role, r)
+		}
+		if r, _ := parse("model: fixture, effort: arbitrary, provider: chatgpt"); r != (Role{Provider: "chatgpt", Model: "fixture", Effort: "arbitrary"}) {
+			t.Errorf("%s.%s chatgpt: %+v", section, role, r)
+		}
+		for _, effort := range []string{"low", "medium", "high", "xhigh"} {
+			if r, _ := parse("model: grok-4.7, effort: " + effort + ", provider: supergrok"); r != (Role{Provider: "supergrok", Model: "grok-4.7", Effort: effort}) {
+				t.Errorf("%s.%s supergrok %s: %+v", section, role, effort, r)
 			}
-			if r, _ := parse("model: fixture, effort: arbitrary"); r != (Role{Model: "fixture", Effort: "arbitrary"}) {
-				t.Errorf("%s.%s without provider: %+v", section, role, r)
-			}
-			if r, _ := parse("model: fixture, effort: arbitrary, provider: chatgpt"); r != (Role{Provider: "chatgpt", Model: "fixture", Effort: "arbitrary"}) {
-				t.Errorf("%s.%s chatgpt: %+v", section, role, r)
-			}
-			for _, effort := range []string{"low", "medium", "high", "xhigh"} {
-				if r, _ := parse("model: grok-4.7, effort: " + effort + ", provider: supergrok"); r != (Role{Provider: "supergrok", Model: "grok-4.7", Effort: effort}) {
-					t.Errorf("%s.%s supergrok %s: %+v", section, role, effort, r)
+		}
+		for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5-5"} {
+			for _, effort := range []string{"low", "medium", "high", "max"} {
+				if r, _ := parse("model: " + model + ", effort: " + effort + ", provider: anthropic"); r != (Role{Provider: "anthropic", Model: model, Effort: effort}) {
+					t.Errorf("%s.%s anthropic %s %s: %+v", section, role, model, effort, r)
 				}
 			}
-			for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5-5"} {
-				for _, effort := range []string{"low", "medium", "high", "max"} {
-					if r, _ := parse("model: " + model + ", effort: " + effort + ", provider: anthropic"); r != (Role{Provider: "anthropic", Model: model, Effort: effort}) {
-						t.Errorf("%s.%s anthropic %s %s: %+v", section, role, model, effort, r)
-					}
-				}
+		}
+		// KOGEN-057: no allowlists. Any model and effort reach the provider unchanged,
+		// including the ones the old lists refused.
+		for _, c := range []struct{ provider, model, effort string }{
+			{"anthropic", "claude-invented", "high"}, {"anthropic", "claude-opus-5-5", "xhigh"}, {"anthropic", "claude-haiku-5-5", "low"},
+			{"opencode-go", "kimi-k3.1-pro", "xhigh"}, {"opencode-go", "glm-5", "low"}, {"opencode-go", "kimi-k3", "default"},
+			{"supergrok", "grok-4.20-0309-reasoning", "xhigh"}, {"supergrok", "grok-5", "low"},
+			{"chatgpt", "gpt-7-preview", "minimal"},
+		} {
+			fields := "model: " + c.model + ", effort: " + c.effort + ", provider: " + c.provider
+			if r, se := parse(fields); se != nil || r != (Role{Provider: c.provider, Model: c.model, Effort: c.effort}) {
+				t.Errorf("%s.%s %s: %+v %+v", section, role, fields, r, se)
 			}
-			// KOGEN-057: no allowlists. Any model and effort reach the provider unchanged,
-			// including the ones the old lists refused.
-			for _, c := range []struct{ provider, model, effort string }{
-				{"anthropic", "claude-invented", "high"}, {"anthropic", "claude-opus-5-5", "xhigh"}, {"anthropic", "claude-haiku-5-5", "low"},
-				{"opencode-go", "kimi-k3.1-pro", "xhigh"}, {"opencode-go", "glm-5", "low"}, {"opencode-go", "kimi-k3", "default"},
-				{"supergrok", "grok-4.20-0309-reasoning", "xhigh"}, {"supergrok", "grok-5", "low"},
-				{"chatgpt", "gpt-7-preview", "minimal"},
-			} {
-				fields := "model: " + c.model + ", effort: " + c.effort + ", provider: " + c.provider
-				if r, se := parse(fields); se != nil || r != (Role{Provider: c.provider, Model: c.model, Effort: c.effort}) {
-					t.Errorf("%s.%s %s: %+v %+v", section, role, fields, r, se)
-				}
+		}
+		// A named provider other than ChatGPT still needs a non-blank model and effort.
+		for _, fields := range []string{"model: '', effort: high, provider: supergrok", "model: kimi-k3, effort: ' ', provider: opencode-go"} {
+			_, se := parse(fields)
+			want := "line 3: " + section + "." + role + " must be {model, effort}"
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{want}) {
+				t.Errorf("%s.%s %s: %+v", section, role, fields, se)
 			}
-			// A named provider other than ChatGPT still needs a non-blank model and effort.
-			for _, fields := range []string{"model: '', effort: high, provider: supergrok", "model: kimi-k3, effort: ' ', provider: opencode-go"} {
-				_, se := parse(fields)
-				want := "line 3: " + section + "." + role + " must be {model, effort}"
-				if section == "shape_workers" {
-					want += " strings"
-				}
-				if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{want}) {
-					t.Errorf("%s.%s %s: %+v", section, role, fields, se)
-				}
+		}
+		for _, provider := range []string{"grok", "xai", "true", "null", "claude", "opencode", "openai", "ollama"} {
+			_, se := parse("model: grok-4.7, effort: low, provider: " + provider)
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible"}) {
+				t.Errorf("%s.%s provider %s: %+v", section, role, provider, se)
 			}
-			for _, provider := range []string{"grok", "xai", "true", "null", "claude", "opencode", "openai", "ollama"} {
-				_, se := parse("model: grok-4.7, effort: low, provider: " + provider)
-				if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible"}) {
-					t.Errorf("%s.%s provider %s: %+v", section, role, provider, se)
-				}
+		}
+		// openai-compatible: base_url is required, must be http(s), is trimmed of a trailing
+		// slash, and is refused on every other provider.
+		for _, base := range []string{"'http://localhost:11434/v1'", "\"https://llm.example.com/v1/\""} {
+			r, se := parse("provider: openai-compatible, model: qwen3-coder:30b, effort: default, base_url: " + base)
+			want := strings.TrimRight(strings.Trim(base, "'\""), "/")
+			if se != nil || r != (Role{Provider: "openai-compatible", Model: "qwen3-coder:30b", Effort: "default", BaseURL: want}) {
+				t.Errorf("%s.%s base %s: %+v %+v", section, role, base, r, se)
 			}
-			// openai-compatible: base_url is required, must be http(s), is trimmed of a trailing
-			// slash, and is refused on every other provider.
-			for _, base := range []string{"'http://localhost:11434/v1'", "\"https://llm.example.com/v1/\""} {
-				r, se := parse("provider: openai-compatible, model: qwen3-coder:30b, effort: default, base_url: " + base)
-				want := strings.TrimRight(strings.Trim(base, "'\""), "/")
-				if se != nil || r != (Role{Provider: "openai-compatible", Model: "qwen3-coder:30b", Effort: "default", BaseURL: want}) {
-					t.Errorf("%s.%s base %s: %+v %+v", section, role, base, r, se)
-				}
-			}
-			for _, c := range []struct{ fields, want string }{
-				{"provider: openai-compatible, model: m, effort: default", ": openai-compatible needs base_url, for example http://localhost:11434/v1"},
-				{"provider: openai-compatible, model: m, effort: default, base_url: 'ftp://host/v1'", ".base_url must be an http:// or https:// URL"},
-				{"provider: openai-compatible, model: m, effort: default, base_url: 'localhost:11434'", ".base_url must be an http:// or https:// URL"},
-				{"provider: openai-compatible, model: m, effort: default, base_url: 'http://h/v1?x=1'", ".base_url must be an http:// or https:// URL"},
-				{"provider: openai-compatible, model: m, effort: default, base_url: 3", ".base_url must be an http:// or https:// URL"},
-				{"provider: opencode-go, model: kimi-k3, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
-				{"model: gpt-6.1-sol, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
-			} {
-				_, se := parse(c.fields)
-				if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + c.want}) {
-					t.Errorf("%s.%s %s: %+v", section, role, c.fields, se)
-				}
+		}
+		for _, c := range []struct{ fields, want string }{
+			{"provider: openai-compatible, model: m, effort: default", ": openai-compatible needs base_url, for example http://localhost:11434/v1"},
+			{"provider: openai-compatible, model: m, effort: default, base_url: 'ftp://host/v1'", ".base_url must be an http:// or https:// URL"},
+			{"provider: openai-compatible, model: m, effort: default, base_url: 'localhost:11434'", ".base_url must be an http:// or https:// URL"},
+			{"provider: openai-compatible, model: m, effort: default, base_url: 'http://h/v1?x=1'", ".base_url must be an http:// or https:// URL"},
+			{"provider: openai-compatible, model: m, effort: default, base_url: 3", ".base_url must be an http:// or https:// URL"},
+			{"provider: opencode-go, model: kimi-k3, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
+			{"model: gpt-6.1-sol, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
+		} {
+			_, se := parse(c.fields)
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + c.want}) {
+				t.Errorf("%s.%s %s: %+v", section, role, c.fields, se)
 			}
 		}
 	}
@@ -562,22 +526,17 @@ func TestEffortPerRoute(t *testing.T) {
 		{"provider: opencode-go, model: m", "ultra", false, "any effort except ultra"},
 		{"provider: openai-compatible, base_url: 'http://h/v1', model: m", "ultra", false, "any effort except ultra"},
 	} {
-		for _, section := range []string{"models:\n  build", "shape_workers:\n  enabled: false\n  read"} {
-			if strings.Contains(tt.fields, "executor") && strings.HasPrefix(section, "shape_workers") {
-				continue
+		text := "version: 1\nmodels:\n  build: {" + tt.fields + ", effort: " + tt.effort + "}\n"
+		_, err := ParseConfig(text, "f")
+		if tt.ok {
+			if err != nil {
+				t.Errorf("%q: %v", text, err)
 			}
-			text := "version: 1\n" + section + ": {" + tt.fields + ", effort: " + tt.effort + "}\n"
-			_, err := ParseConfig(text, "f")
-			if tt.ok {
-				if err != nil {
-					t.Errorf("%q: %v", text, err)
-				}
-				continue
-			}
-			se, _ := sys.AsError(err)
-			if se == nil || len(se.Lines) != 1 || !strings.HasSuffix(se.Lines[0], ".effort \""+tt.effort+"\" is not supported; accepted: "+tt.accepted) {
-				t.Errorf("%q: %+v", text, err)
-			}
+			continue
+		}
+		se, _ := sys.AsError(err)
+		if se == nil || len(se.Lines) != 1 || !strings.HasSuffix(se.Lines[0], ".effort \""+tt.effort+"\" is not supported; accepted: "+tt.accepted) {
+			t.Errorf("%q: %+v", text, err)
 		}
 	}
 }
@@ -713,14 +672,6 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 	b := mustParse(t, "version: 1\nmodels:\n  review: {model: m, effort: e}\n").Models["review"]
 	if a != b {
 		t.Fatalf("explicit native %+v differs from omission %+v", a, b)
-	}
-}
-
-func TestExecutorKeysAreNotAcceptedAnywhereElse(t *testing.T) {
-	// The workers are not build roles: the keys are unknown to them, as before.
-	se := configError(t, "version: 1\nshape_workers:\n  enabled: false\n  read: {executor: claude-code, model: m, effort: e}\n", "f")
-	if !slices.Equal(se.Lines, []string{"line 4: shape_workers.read must be {model, effort} strings"}) {
-		t.Fatalf("%+v", se)
 	}
 }
 
