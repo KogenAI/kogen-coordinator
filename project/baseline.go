@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -81,16 +80,12 @@ func Protected(root string, cfg *Config) ([]string, error) {
 	if len(cfg.Protect) == 0 {
 		return nil, nil
 	}
-	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Dir = root
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitOK(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	if err != nil {
-		return nil, fmt.Errorf("git ls-files failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git ls-files failed: %w", err)
 	}
 	var files []string
-	for _, f := range strings.Split(string(out), "\x00") {
+	for _, f := range strings.Split(out, "\x00") {
 		if f != "" {
 			files = append(files, f)
 		}

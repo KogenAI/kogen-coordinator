@@ -3,7 +3,6 @@ package project
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -261,16 +260,20 @@ var (
 	testLineRe = regexp.MustCompile(`^- (none: \S.*|.+: .+ \((unit|integration|scenario|regression|existing)\)\.?)$`)
 )
 
+// projectGit is the repository layer's runner for root with the process environment: the git binary
+// is the one first on PATH and the location variables are removed.
+func projectGit(root string) *repogit.Repo { return repogit.New(root, nil) }
+
+// gitOK runs git with args in root through projectGit and returns its stdout.
+func gitOK(root string, args ...string) (string, error) { return projectGit(root).OK(args...) }
+
 // gitUserName reads the effective configuration in the target repository, independently of email.
 func gitUserName(root string) string {
-	cmd := exec.Command("git", "config", "--get", "user.name")
-	cmd.Dir = root
-	cmd.Env = repogit.CleanEnv(os.Environ())
-	out, err := cmd.Output()
+	out, err := gitOK(root, "config", "--get", "user.name")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }
 
 var ownerAuthorizationRe = regexp.MustCompile(`(?i)\b(?:(?:the\s+)?(?:owner|user)\s+(?:(?:has|had)\s+)?(?:approves?|approved|authorizes?|authorized)|(?:approved|authorized)\s+by\s+(?:the\s+)?(?:owner|user))\b`)
@@ -364,7 +367,7 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool, userName string) [
 	}
 	ignored := map[string]bool{}
 	if ordered && len(valid) > 0 {
-		ignoredPaths, err := repogit.New(i.Root, nil).Ignored(valid...)
+		ignoredPaths, err := projectGit(i.Root).Ignored(valid...)
 		if err != nil {
 			add("acceptance: Git ignore check could not run")
 		}
