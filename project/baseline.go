@@ -2,6 +2,7 @@ package project
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/KogenAI/kogen-coordinator/durable"
 )
 
 // Baseline is the acceptance baseline (VER-1, AUT-2) in card order: the Intent's `intent.md` and
@@ -247,7 +250,9 @@ func EncodeApproval(a Approval) ([]byte, error) {
 	return buf.Bytes(), nil // Encode already ends with a newline
 }
 
-// WriteApproval writes the approval file, creating its folder.
+// WriteApproval writes the approval file, creating its folder. The bytes go to a unique temp file
+// in that folder, which is flushed once and renamed over the approval, so a reader sees the old
+// approval or the complete new one; a failure removes the temp file and keeps the old approval.
 func WriteApproval(root string, a Approval) error {
 	b, err := EncodeApproval(a)
 	if err != nil {
@@ -257,5 +262,32 @@ func WriteApproval(root string, a Approval) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return err
+	}
+	tmp := path + ".tmp-" + hex.EncodeToString(suffix[:])
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := durable.Sync(f); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
