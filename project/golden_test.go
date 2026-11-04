@@ -543,8 +543,17 @@ func TestIntentReadMatchesElixir(t *testing.T) {
 			}
 		}
 		emptyLists(want)
-		if gs, ws := canon(t, got), canon(t, want); gs != ws && !u.record(got, "intent_read", i, "result") {
-			t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, gs, ws)
+		if gs, ws := canon(t, got), canon(t, want); gs != ws {
+			recorded := make(map[string]any, len(got))
+			for k, v := range got {
+				recorded[k] = v
+				if c.Result[k] == nil && canon(t, v) == canon(t, want[k]) {
+					recorded[k] = nil
+				}
+			}
+			if !u.record(recorded, "intent_read", i, "result") {
+				t.Errorf("case %d %q:\n got %s\nwant %s", i, c.Text, gs, ws)
+			}
 		}
 	}
 }

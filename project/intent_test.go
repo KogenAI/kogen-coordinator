@@ -109,7 +109,7 @@ func TestIntentAcceptanceOnlySkipsBlanksBeforeFirstBullet(t *testing.T) {
 		}
 		return in.Acceptance
 	}
-	for _, boundary := range []string{"", "ordinary text", "## Decisions"} {
+	for _, boundary := range []string{"", "## Decisions"} {
 		if got := read("Acceptance:\n\n- " + feature + "\n" + boundary + "\n- unrelated\n"); !slices.Equal(got, []string{feature}) {
 			t.Errorf("boundary %q: %v", boundary, got)
 		}
@@ -535,7 +535,7 @@ func TestReadIntentFields(t *testing.T) {
 	if in.Title != "Title here" || in.SlugLine != " demo-intent" || in.ModelLine != "not applicable — x" || in.Model == nil || !in.Model.None || in.Slug != demoSlug || in.Text != text {
 		t.Errorf("fields %+v", in)
 	}
-	if !slices.Equal(in.Decisions, []string{"- d1 (source: request)", "- d2"}) || !slices.Equal(in.Tests, []string{"- t1"}) || !slices.Equal(in.Feasibility, []string{"- none"}) {
+	if !slices.Equal(in.Decisions, []string{"- d1 (source: request) prose", "- d2"}) || !slices.Equal(in.Tests, []string{"- t1"}) || !slices.Equal(in.Feasibility, []string{"- none"}) {
 		t.Errorf("sections %q %q %q", in.Decisions, in.Tests, in.Feasibility)
 	}
 	if !slices.Equal(in.StepFiles(), []string{"features/steps/a.js"}) {
@@ -852,5 +852,79 @@ func TestCheckIntentTargetGitUserTitles(t *testing.T) {
 				t.Fatalf("missing title in problems: %v", lines)
 			}
 		})
+	}
+}
+
+func TestReadIntentWrappedBullets(t *testing.T) {
+	text := "# Demo\nSlug: demo-intent\nModel: not applicable — parsing\nAcceptance:\n\n- first\n extra\n- second\n  path\n\nignored\n- excluded\n## Decisions\n- First\nparagraph (source: request)\n\nignored\n- Second (source: request)\n## Tests\n- Rule: coverage\n  (unit)\n## Feasibility\n- none: local\nparsing only\n## Other\nignored\n"
+	in, err := ReadIntent(t.TempDir(), demoSlug, map[string][]byte{IntentMDPath(demoSlug): []byte(text)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Text != text {
+		t.Error("source text changed")
+	}
+	for _, c := range []struct {
+		name      string
+		got, want []string
+	}{
+		{"acceptance", in.Acceptance, []string{"first extra", "second path"}},
+		{"decisions", in.Decisions, []string{"- First paragraph (source: request)", "- Second (source: request)"}},
+		{"tests", in.Tests, []string{"- Rule: coverage (unit)"}},
+		{"feasibility", in.Feasibility, []string{"- none: local parsing only"}},
+	} {
+		if !slices.Equal(c.got, c.want) {
+			t.Errorf("%s: got %q want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestCheckIntentWrappedAndMarkers(t *testing.T) {
+	root := intentRoot(t)
+	for _, tc := range []struct {
+		name    string
+		parts   demoParts
+		section string
+	}{
+		{"wrapped", demoParts{dec: sp("## Decisions\n- Retry\n  (source: request)\n"), tests: sp("## Tests\n- Retry: coverage\n  (unit)\n")}, ""},
+		{"missing layer", demoParts{tests: sp("## Tests\n- Retry: coverage\n  without layer\n")}, "tests"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			overlay := map[string][]byte{IntentMDPath(demoSlug): []byte(demoMD(tc.parts)), FeaturePath(demoSlug): []byte(goodFeature)}
+			_, _, err := CheckIntent(root, demoSlug, overlay)
+			if tc.section == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			lines := problemsOf(t, err, "lint")
+			if !strings.Contains(strings.Join(lines, "\n"), "- Retry: coverage without layer") {
+				t.Fatal(lines)
+			}
+		})
+	}
+	for _, section := range []string{"acceptance", "decisions", "tests", "feasibility"} {
+		for _, marker := range []string{"*", "+"} {
+			t.Run(section+marker, func(t *testing.T) {
+				var p demoParts
+				switch section {
+				case "acceptance":
+					p.acc = sp("Acceptance:\n" + marker + " item")
+				case "decisions":
+					p.dec = sp("## Decisions\n" + marker + " item (source: request)")
+				case "tests":
+					p.tests = sp("## Tests\n" + marker + " item")
+				case "feasibility":
+					p.feas = sp("## Feasibility\n" + marker + " item")
+				}
+				overlay := map[string][]byte{IntentMDPath(demoSlug): []byte(demoMD(p)), FeaturePath(demoSlug): []byte(goodFeature)}
+				_, _, err := CheckIntent(root, demoSlug, overlay)
+				lines := problemsOf(t, err, "lint")
+				if len(lines) != 1 || !strings.HasPrefix(lines[0], section+":") || !strings.Contains(lines[0], "`- `") {
+					t.Fatal(lines)
+				}
+			})
+		}
 	}
 }

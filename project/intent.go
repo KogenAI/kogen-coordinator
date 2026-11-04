@@ -136,42 +136,56 @@ func afterHeader(lines []string, header string) ([]string, bool) {
 	return nil, false
 }
 
-// listAfter is the `- ` bullets right after a header line, skipping blank lines before the first.
+// logicalBullets reads column-zero markers and their adjacent continuation lines.
+func logicalBullets(lines []string, acceptance bool) []string {
+	var out []string
+	active := false
+	for _, l := range lines {
+		if strings.HasPrefix(l, "#") {
+			break
+		}
+		if strings.TrimSpace(l) == "" {
+			if acceptance && len(out) > 0 {
+				break
+			}
+			active = false
+			continue
+		}
+		marker := strings.HasPrefix(l, "- ") || strings.HasPrefix(l, "* ") || strings.HasPrefix(l, "+ ")
+		if marker {
+			item := l
+			if acceptance && strings.HasPrefix(l, "- ") {
+				item = strings.TrimSpace(l[2:])
+			}
+			out = append(out, item)
+			active = true
+		} else if active {
+			out[len(out)-1] = strings.TrimRightFunc(out[len(out)-1], unicode.IsSpace) + " " + strings.TrimSpace(l)
+		} else if acceptance {
+			break
+		}
+	}
+	return out
+}
+
 func listAfter(lines []string, header string) []string {
 	rest, ok := afterHeader(lines, header)
 	if !ok {
 		return nil
 	}
-	for len(rest) > 0 && strings.TrimSpace(rest[0]) == "" {
-		rest = rest[1:]
-	}
-	var out []string
-	for _, l := range rest {
-		item, ok := strings.CutPrefix(l, "- ")
-		if !ok {
-			break
-		}
-		out = append(out, strings.TrimSpace(item))
-	}
-	return out
+	return logicalBullets(rest, true)
 }
 
-// sectionBullets is the `- ` lines of a section, up to the next line starting with #.
 func sectionBullets(lines []string, header string) []string {
 	rest, ok := afterHeader(lines, header)
 	if !ok {
 		return nil
 	}
-	var out []string
-	for _, l := range rest {
-		if strings.HasPrefix(l, "#") {
-			break
-		}
-		if strings.HasPrefix(l, "- ") {
-			out = append(out, l)
-		}
-	}
-	return out
+	return logicalBullets(rest, false)
+}
+
+func unsupportedMarker(s string) bool {
+	return strings.HasPrefix(s, "* ") || strings.HasPrefix(s, "+ ")
 }
 
 var modelLineRe = regexp.MustCompile(`^(\S+\.qnt) invariants=([A-Za-z_][A-Za-z0-9_]*(?:,[A-Za-z_][A-Za-z0-9_]*)*) seed=(\d+) samples=(\d+) steps=(\d+)$`)
@@ -315,7 +329,9 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 		add("tests: the ## Tests section is missing or empty")
 	default:
 		for _, l := range i.Tests {
-			if !testLineRe.MatchString(l) {
+			if unsupportedMarker(l) {
+				add("tests: use the required `- ` bullet marker: " + l)
+			} else if !testLineRe.MatchString(l) {
 				add("tests: " + l + " must be `- <rule>: <test to add or update> (<layer>)` or `- none: <reason>`")
 			}
 		}
@@ -323,13 +339,16 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 
 	feature := FeaturePath(i.Slug)
 	ordered := len(i.Acceptance) > 0 && i.Acceptance[0] == feature
-	if !ordered {
+	if !ordered && (len(i.Acceptance) == 0 || !unsupportedMarker(i.Acceptance[0])) {
 		add("acceptance: the Acceptance: list must start with " + feature)
 	}
 	valid := make([]string, 0, len(i.Acceptance))
 	checks := make(map[string][]string)
 	rules := make([]string, len(i.Acceptance))
 	for n, p := range i.Acceptance {
+		if unsupportedMarker(p) {
+			continue
+		}
 		rules[n] = acceptancePathRule(i.Root, p)
 		if rules[n] == "" {
 			checks[p] = acceptanceIgnorePaths(i.Root, p)
@@ -347,7 +366,9 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 		}
 	}
 	for n, p := range i.Acceptance {
-		if rules[n] != "" {
+		if unsupportedMarker(p) {
+			add("acceptance: use the required `- ` bullet marker: " + p)
+		} else if rules[n] != "" {
 			add("acceptance: " + p + " " + rules[n])
 		} else if ordered {
 			_, inOverlay := i.Overlay[p]
@@ -361,13 +382,21 @@ func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
 	}
 
 	for _, d := range i.Decisions {
-		if !sourceRe.MatchString(d) {
+		if unsupportedMarker(d) {
+			add("decisions: use the required `- ` bullet marker: " + d)
+		} else if !sourceRe.MatchString(d) {
 			add("decisions: " + d + " must end with `(source: request)` or `(source: answer <n>)`")
 		}
 	}
 
 	if len(i.Feasibility) == 0 {
 		add("feasibility: intent.md needs a ## Feasibility section listing each probe, or - none")
+	}
+
+	for _, f := range i.Feasibility {
+		if unsupportedMarker(f) {
+			add("feasibility: use the required `- ` bullet marker: " + f)
+		}
 	}
 
 	if parsed && len(scenarios) == 0 {
