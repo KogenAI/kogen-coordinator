@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -189,8 +190,7 @@ func HashWithUnreadable(root string, paths []string) (string, []string) {
 	var buf bytes.Buffer
 	for _, p := range sorted {
 		digest := "missing"
-		if b, err := os.ReadFile(filepath.Join(root, p)); err == nil {
-			sum := sha256.Sum256(b)
+		if sum, err := fileDigest(filepath.Join(root, p)); err == nil {
 			digest = hex.EncodeToString(sum[:])
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			digest = "unreadable"
@@ -200,6 +200,22 @@ func HashWithUnreadable(root string, paths []string) (string, []string) {
 	}
 	sum := sha256.Sum256(buf.Bytes())
 	return hex.EncodeToString(sum[:]), unreadable
+}
+
+// fileDigest streams the file at path through SHA-256 in 32 KiB chunks.
+func fileDigest(path string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return sum, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.CopyBuffer(h, f, make([]byte, 32*1024)); err != nil {
+		return sum, err
+	}
+	h.Sum(sum[:0])
+	return sum, nil
 }
 
 // Approval is `.kogen/local/approvals/<slug>.json` (AUT-2).

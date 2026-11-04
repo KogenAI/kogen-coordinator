@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
@@ -384,4 +385,24 @@ func (f *fixture) read(t *testing.T, rel string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestInputAtDigestsFilesOfChunkBoundaryLengths(t *testing.T) {
+	for _, n := range []int{0, 1, 32767, 32768, 32769, 65536, 1048576} {
+		path := filepath.Join(t.TempDir(), "data.bin")
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte(i * 7)
+		}
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		in, err := inputAt(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.Kind != "file" || in.Exec != 0o111 || in.Digest != sha256.Sum256(data) {
+			t.Errorf("%d bytes: got %+v", n, in)
+		}
+	}
 }

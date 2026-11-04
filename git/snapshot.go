@@ -508,11 +508,11 @@ func inputAt(full string) (Input, error) {
 		target, err := os.Readlink(full)
 		return Input{Kind: "symlink", Target: target}, err
 	case st.Mode().IsRegular():
-		data, err := os.ReadFile(full)
+		digest, err := fileDigest(full)
 		if err != nil {
 			return Input{}, err
 		}
-		return Input{Kind: "file", Exec: uint32(st.Mode().Perm()) & 0o111, Digest: sha256.Sum256(data)}, nil
+		return Input{Kind: "file", Exec: uint32(st.Mode().Perm()) & 0o111, Digest: digest}, nil
 	case st.IsDir():
 		return Input{Kind: "directory"}, nil
 	}
@@ -602,4 +602,20 @@ func (m *Materialized) gitlinkChanged(path, commit string) bool {
 	}
 	want, err := nested.Resolve(commit + "^{tree}")
 	return err != nil || have != want
+}
+
+// fileDigest streams the file at path through SHA-256 in 32 KiB chunks.
+func fileDigest(path string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return sum, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.CopyBuffer(h, f, make([]byte, 32*1024)); err != nil {
+		return sum, err
+	}
+	h.Sum(sum[:0])
+	return sum, nil
 }

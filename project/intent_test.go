@@ -1031,3 +1031,23 @@ func TestHashWithUnreadable(t *testing.T) {
 		t.Errorf("unexpected unreadable paths: %v", unreadable)
 	}
 }
+
+func TestHashStreamsFilesOfChunkBoundaryLengths(t *testing.T) {
+	for _, n := range []int{0, 1, 32767, 32768, 32769, 65536, 1048576} {
+		root := t.TempDir()
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte(i * 7)
+		}
+		if err := os.WriteFile(filepath.Join(root, "data.bin"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		line := "data.bin\x00" + hex.EncodeToString(sum[:]) + "\n"
+		want := sha256.Sum256([]byte(line))
+		got, unreadable := HashWithUnreadable(root, []string{"data.bin"})
+		if got != hex.EncodeToString(want[:]) || len(unreadable) != 0 {
+			t.Errorf("%d bytes: hash %s unreadable %v, want %x", n, got, unreadable, want)
+		}
+	}
+}
