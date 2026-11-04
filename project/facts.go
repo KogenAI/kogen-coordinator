@@ -2,6 +2,7 @@ package project
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/KogenAI/kogen-coordinator/durable"
 	kgit "github.com/KogenAI/kogen-coordinator/git"
 )
 
@@ -117,16 +119,36 @@ func WritePackageFacts(root, slug string, cfg *Config) error {
 	})
 }
 
-// WriteJSONAtomic writes the JSON of v and a newline to path.tmp and renames it over path, so
-// a reader sees the old file or the new one, never a torn one. It is how every
-// `.kogen/local` record is written.
+// WriteJSONAtomic writes the JSON of v and a newline to a temp file with a unique name in
+// path's folder, flushes it and renames it over path, so a reader sees the old file or the
+// new one, never a torn one, and concurrent writers never share a temp file. The temp file is
+// removed on every failure. It is how every `.kogen/local` record is written.
 func WriteJSONAtomic(path string, v any) error {
 	b, err := EncodeJSON(v)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o666); err != nil {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return err
+	}
+	tmp := path + ".tmp-" + hex.EncodeToString(suffix[:])
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := durable.Sync(f); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {

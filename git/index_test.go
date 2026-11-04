@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/KogenAI/kogen-coordinator/durable"
 )
 
 func TestIndexCustodyRestoresWhatTheUserStaged(t *testing.T) {
@@ -46,6 +48,37 @@ func TestIndexCustodyRestoresWhatTheUserStaged(t *testing.T) {
 	leftovers := must(filepath.Glob(filepath.Join(gitDir, "index.kogen-restore-*")))
 	equal(t, "leftovers", len(leftovers), 0)
 	equal(t, "mode", must(os.Stat(filepath.Join(gitDir, "index"))).Mode().Perm(), beforeMode)
+}
+
+func TestRestoreIndexFlushesItsTempFileBeforeTheRename(t *testing.T) {
+	f := newFixture(t)
+	backup := filepath.Join(t.TempDir(), "index-at-start")
+	if err := f.SaveIndex(backup); err != nil {
+		t.Fatal(err)
+	}
+	saved := must(os.ReadFile(backup))
+	f.write(t, "b.txt", "b\n")
+	f.git(t, "add", "b.txt")
+	path := must(f.IndexPath())
+	replaced := must(f.IndexBytes())
+	var flushed []string
+	var tempBytes, indexBytes []byte
+	durable.ObserveSyncInTests(func(g *os.File) {
+		flushed = append(flushed, g.Name())
+		tempBytes, _ = os.ReadFile(g.Name())
+		indexBytes, _ = os.ReadFile(path)
+	})
+	t.Cleanup(func() { durable.ObserveSyncInTests(nil) })
+	if err := f.RestoreIndex(backup); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "flushes", len(flushed), 1)
+	if filepath.Dir(flushed[0]) != filepath.Dir(path) || !strings.HasPrefix(filepath.Base(flushed[0]), "index.kogen-restore-") {
+		t.Fatalf("flushed %s, want an index.kogen-restore-* file in the Git directory", flushed[0])
+	}
+	equal(t, "temp at flush", bytes.Equal(tempBytes, saved), true)
+	equal(t, "index at flush", bytes.Equal(indexBytes, replaced), true)
+	equal(t, "index", bytes.Equal(must(f.IndexBytes()), saved), true)
 }
 
 func TestIndexCustodyErrors(t *testing.T) {

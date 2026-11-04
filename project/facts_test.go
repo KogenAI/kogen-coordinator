@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/KogenAI/kogen-coordinator/durable"
 )
 
 // factsGoldenFile is testdata/facts-golden.json. factsGolden is its content: the recorded inputs
@@ -294,9 +296,120 @@ func TestWriteJSONAtomicNeverTearsUnderConcurrentReaders(t *testing.T) {
 		t.Fatalf("a reader saw a torn file: %.80q", b)
 	default:
 	}
-	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf("temporary file left behind: %v", err)
+	equal(t, "folder", folderOf(t, filepath.Dir(path)), []string{"context.json"})
+}
+
+func folderOf(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func equal(t *testing.T, name string, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s = %v, want %v", name, got, want)
+	}
+}
+
+func TestWriteJSONAtomicFlushesItsTempFileBeforeTheRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "facts.json")
+	if err := WriteJSONAtomic(path, map[string]any{"n": 1}); err != nil {
+		t.Fatal(err)
+	}
+	var flushed []string
+	var tempBytes, targetBytes []byte
+	durable.ObserveSyncInTests(func(f *os.File) {
+		flushed = append(flushed, f.Name())
+		tempBytes, _ = os.ReadFile(f.Name())
+		targetBytes, _ = os.ReadFile(path)
+	})
+	t.Cleanup(func() { durable.ObserveSyncInTests(nil) })
+	if err := WriteJSONAtomic(path, map[string]any{"n": 2}); err != nil {
+		t.Fatal(err)
+	}
+	if len(flushed) != 1 || filepath.Dir(flushed[0]) != dir || flushed[0] == path+".tmp" {
+		t.Fatalf("flushed %v, want one unique temp file in %s", flushed, dir)
+	}
+	equal(t, "temp at flush", string(tempBytes), "{\"n\":2}\n")
+	equal(t, "target at flush", string(targetBytes), "{\"n\":1}\n")
+	equal(t, "final", readFile(t, path), "{\"n\":2}\n")
+	equal(t, "folder", folderOf(t, dir), []string{"facts.json"})
+}
+
+func encoded(t *testing.T, v any) string {
+	t.Helper()
+	b, err := EncodeJSON(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n"
+}
+
+func TestWriteJSONAtomicConcurrentWritersLeaveOneCompleteInput(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "facts.json")
+		a := map[string]any{"writer": "a", "pad": strings.Repeat("a", 4096)}
+		b := map[string]any{"writer": "b"}
+		wantA, wantB := encoded(t, a), encoded(t, b)
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		for i, v := range []any{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = WriteJSONAtomic(path, v)
+			}()
+		}
+		wg.Wait()
+		if errs[0] != nil || errs[1] != nil {
+			t.Fatalf("round %d: %v, %v", round, errs[0], errs[1])
+		}
+		if got := readFile(t, path); got != wantA && got != wantB {
+			t.Fatalf("round %d: final %.60q is neither input", round, got)
+		}
+		equal(t, "folder", folderOf(t, dir), []string{"facts.json"})
+	}
+}
+
+func TestWriteJSONAtomicFailedRenameLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "facts.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "keep"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSONAtomic(path, map[string]any{"n": 1}); err == nil {
+		t.Fatal("renamed a file over a non-empty directory")
+	}
+	equal(t, "folder", folderOf(t, dir), []string{"facts.json"})
+	equal(t, "inside target", folderOf(t, path), []string{"keep"})
+}
+
+func TestWriteJSONAtomicFailedFlushKeepsTheOldRecordAndLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "facts.json")
+	if err := WriteJSONAtomic(path, map[string]any{"n": 1}); err != nil {
+		t.Fatal(err)
+	}
+	durable.ObserveSyncInTests(func(f *os.File) { f.Close() })
+	t.Cleanup(func() { durable.ObserveSyncInTests(nil) })
+	if err := WriteJSONAtomic(path, map[string]any{"n": 2}); err == nil {
+		t.Fatal("a failed flush returned nil")
+	}
+	equal(t, "record", readFile(t, path), "{\"n\":1}\n")
+	equal(t, "folder", folderOf(t, dir), []string{"facts.json"})
 }
 
 // packageDoc reads a package facts file as a value, with the checkout id taken out.

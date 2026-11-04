@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/KogenAI/kogen-coordinator/durable"
 )
 
 // IndexPath is the user's index file.
@@ -57,10 +59,26 @@ func (r *Repo) RestoreIndex(backup string) error {
 		mode = st.Mode().Perm()
 	}
 	tmp := filepath.Join(filepath.Dir(path), "index.kogen-restore-"+randomHex(8))
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, mode); err != nil {
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := durable.Sync(f); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
 	}
