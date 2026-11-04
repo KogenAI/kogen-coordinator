@@ -26,6 +26,8 @@ func main() {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("git init: %v: %s", err, output))
 	}
+	cmd = exec.Command("git", "-C", root, "config", "user.name", "Fixture User")
+	if output, err := cmd.CombinedOutput(); err != nil { panic(fmt.Sprintf("git config: %v: %s", err, output)) }
 	overlay := map[string][]byte{project.IntentMDPath("demo"): []byte(in.Intent), project.FeaturePath("demo"): []byte(in.Feature)}
 	out := map[string]any{"exit": 0, "render": ""}
 	if _, _, err := project.CheckIntent(root, "demo", overlay); err != nil {

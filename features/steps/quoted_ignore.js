@@ -13,7 +13,10 @@ function run(command, args, options = {}) {
 Given(/^a quoted-path fixture (in a Git repository|outside a Git repository) with acceptance path (.+)$/, function (mode, file) {
   this.qRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'quoted-ignore-'));
   this.qPath = file;
-  if (mode === 'in a Git repository') run('git', ['init', '-q', this.qRoot]);
+  if (mode === 'in a Git repository') {
+    run('git', ['init', '-q', this.qRoot]);
+    run('git', ['-C', this.qRoot, 'config', 'user.name', 'Fixture User']);
+  }
   const write = (p, text) => { const dest = path.join(this.qRoot, p); fs.mkdirSync(path.dirname(dest), {recursive:true}); fs.writeFileSync(dest, text); };
   write('.gitignore', '*.skip.js\n');
   write(file, '// fixture\n');
@@ -28,7 +31,7 @@ When('the quoted-path Intent is checked', {timeout:300000}, function () {
     binary = path.join(buildDir, 'driver');
     run('go', ['build', '-o', binary, source]);
   }
-  this.qLines = JSON.parse(run(binary, [this.qRoot]));
+  this.qLines = JSON.parse(run(binary, [this.qRoot], {env: {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_COUNT: '0'}}));
 });
 Then(/^its quoted-path result is (ignored|clean|unavailable)$/, function (result) {
   if (result === 'clean') assert.deepEqual(this.qLines, []);

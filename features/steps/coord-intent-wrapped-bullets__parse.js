@@ -23,6 +23,7 @@ func main() {
  b,e:=io.ReadAll(os.Stdin); if e!=nil {panic(e)}
  root,e:=os.MkdirTemp("","wrapped-intent-"); if e!=nil {panic(e)}; defer os.RemoveAll(root)
  c:=exec.Command("git","init","-q",root); if o,e:=c.CombinedOutput();e!=nil {panic(string(o))}
+ c=exec.Command("git","-C",root,"config","user.name","Fixture User"); if o,e:=c.CombinedOutput();e!=nil {panic(string(o))}
  if e:=os.MkdirAll(filepath.Join(root,project.IntentDir("demo")),0755);e!=nil {panic(e)}
  overlay:=map[string][]byte{project.IntentMDPath("demo"):b,project.FeaturePath("demo"):[]byte("Feature: Fixture\\n  Scenario: Fixture\\n    Then fixture passes\\n")}
  i,e:=project.ReadIntent(root,"demo",overlay);if e!=nil {panic(e)}

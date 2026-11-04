@@ -169,3 +169,11 @@ func TestCheckIntent(t *testing.T) {
 	}
 	equal(t, "ModelLine", checked.ModelLine, ".kogen/intents/fixture/model.qnt invariants=Safe seed=1 samples=2 steps=3")
 }
+
+// Direct callers supply the effective name rather than relying on repository configuration.
+func TestCheckTitle(t *testing.T) {
+	equalList(t, "named title", project.CheckTitle("Sam Lee fixes export", "Sam Lee"), []string{`title: "Sam Lee fixes export" names the Git user "Sam Lee" (git user.name); use an owner-authored title instead`})
+	if got := project.CheckTitle("Sam Lee fixes export", ""); len(got) != 0 {
+		t.Fatalf("unexpected problems: %v", got)
+	}
+}

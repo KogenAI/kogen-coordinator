@@ -230,6 +230,7 @@ func (i *Intent) StepFiles() []string {
 // the disk. It returns the Intent and its scenarios, or an *sys.Error `intent/parse: the Intent
 // cannot be read` / `intent/lint: the Intent needs changes` (exit 1) with one line per problem.
 func CheckIntent(root, slug string, overlay map[string][]byte) (*Intent, []Scenario, error) {
+	userName := gitUserName(root)
 	if _, err := fetch(root, overlay, IntentMDPath(slug)); err != nil {
 		return nil, nil, parseError("intent.md does not exist")
 	}
@@ -244,10 +245,10 @@ func CheckIntent(root, slug string, overlay map[string][]byte) (*Intent, []Scena
 	scenarios, err := ParseGherkin(string(b))
 	if err != nil {
 		ge := err.(*GherkinError)
-		lines := append([]string{fmt.Sprintf("acceptance.feature line %d: %s", ge.Line, ge.Message)}, lintIntent(intent, nil, false)...)
+		lines := append([]string{fmt.Sprintf("acceptance.feature line %d: %s", ge.Line, ge.Message)}, lintIntent(intent, nil, false, userName)...)
 		return nil, nil, parseError(lines...)
 	}
-	if problems := lintIntent(intent, scenarios, true); len(problems) > 0 {
+	if problems := lintIntent(intent, scenarios, true, userName); len(problems) > 0 {
 		e := sys.Fail("intent", "lint", "the Intent needs changes", 1)
 		e.Lines = problems
 		return nil, nil, e
@@ -290,28 +291,34 @@ func titleNamesUser(title, name string) bool {
 	return false
 }
 
-// lintIntent lists every problem. With parsed false the feature did not parse, so the checks that
-// need its scenarios are skipped.
-func lintIntent(i *Intent, scenarios []Scenario, parsed bool) []string {
+// CheckTitle returns the title problems using the supplied Git user name, without reading Git configuration.
+func CheckTitle(title, userName string) []string {
 	var problems []string
-	add := func(p ...string) { problems = append(problems, p...) }
-
-	if i.Title == "" {
+	add := func(p string) { problems = append(problems, p) }
+	if title == "" {
 		add("title: intent.md must start with a # title")
 	} else {
-		if n := graphemeLen(i.Title); n > 50 {
+		if n := graphemeLen(title); n > 50 {
 			add(fmt.Sprintf("title: the title must be at most 50 characters, not %d", n))
 		}
-		if titleNamesUser(i.Title, gitUserName(i.Root)) {
-			add(fmt.Sprintf("title: %q names the Git user; use an owner-authored title instead", i.Title))
+		if titleNamesUser(title, userName) {
+			add(fmt.Sprintf("title: %q names the Git user %q (git user.name); use an owner-authored title instead", title, userName))
 		}
-		if ownerAuthorizationRe.MatchString(i.Title) {
-			add(fmt.Sprintf("title: %q narrates owner or user approval or authorization in the third person", i.Title))
+		if ownerAuthorizationRe.MatchString(title) {
+			add(fmt.Sprintf("title: %q narrates owner or user approval or authorization in the third person", title))
 		}
-		if strings.HasSuffix(i.Title, ".") {
+		if strings.HasSuffix(title, ".") {
 			add("title: the title must not end with a period")
 		}
 	}
+	return problems
+}
+
+// lintIntent lists every problem. With parsed false the feature did not parse, so the checks that
+// need its scenarios are skipped.
+func lintIntent(i *Intent, scenarios []Scenario, parsed bool, userName string) []string {
+	problems := CheckTitle(i.Title, userName)
+	add := func(p ...string) { problems = append(problems, p...) }
 
 	if strings.TrimSpace(i.SlugLine) != i.Slug {
 		add("slug: the Slug: line must be " + i.Slug)

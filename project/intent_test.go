@@ -928,3 +928,63 @@ func TestCheckIntentWrappedAndMarkers(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckTitleExplicitName(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	narration := `title: "The owner approved retry" narrates owner or user approval or authorization in the third person`
+	for _, tc := range []struct {
+		title, name string
+		want        []string
+	}{
+		{"Sam Lee fixes export", "Sam Lee", []string{`title: "Sam Lee fixes export" names the Git user "Sam Lee" (git user.name); use an owner-authored title instead`}},
+		{"Pat Owner fixes export", "Sam Lee", nil},
+		{"Pat Owner adds retry", "Pat Owner", []string{`title: "Pat Owner adds retry" names the Git user "Pat Owner" (git user.name); use an owner-authored title instead`}},
+		{"PAT OWNER adds retry", "Pat Owner", []string{`title: "PAT OWNER adds retry" names the Git user "Pat Owner" (git user.name); use an owner-authored title instead`}},
+		{"Pat Ownership adds retry", "Pat Owner", nil},
+		{"Pat Owner adds retry", "", nil},
+		{"The owner approved retry", "", []string{narration}},
+		{"The owner approved retry", "Sam Lee", []string{narration}},
+	} {
+		t.Run(tc.title+"/"+tc.name, func(t *testing.T) {
+			if got := CheckTitle(tc.title, tc.name); !slices.Equal(got, tc.want) {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckIntentNameDiagnostics(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	root := intentRoot(t)
+	setName := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", append([]string{"config"}, args...)...)
+		c.Dir = root
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git config: %s: %v", out, err)
+		}
+	}
+	setName("user.name", "Pat Owner")
+	check := func(title, feature, reason string, want []string) {
+		t.Helper()
+		overlay := map[string][]byte{IntentMDPath(demoSlug): []byte(demoMD(demoParts{title: sp("# " + title)})), FeaturePath(demoSlug): []byte(feature)}
+		_, _, err := CheckIntent(root, demoSlug, overlay)
+		if reason == "" {
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if got := problemsOf(t, err, reason); !slices.Equal(got, want) {
+			t.Fatalf("got %q want %q", got, want)
+		}
+	}
+	diagnostic := `title: "Pat Owner adds retry" names the Git user "Pat Owner" (git user.name); use an owner-authored title instead`
+	check("Pat Owner adds retry", goodFeature, "lint", []string{diagnostic})
+	check("Pat Ownership adds retry", goodFeature, "", nil)
+	check("Pat Owner adds retry", "not a feature\n", "parse", []string{"acceptance.feature line 1: expected Feature:, got: not a feature", diagnostic})
+	setName("--unset", "user.name")
+	check("Pat Owner adds retry", goodFeature, "", nil)
+}
