@@ -36,7 +36,46 @@ func Detect(files map[string]string, tracked []string) Detected {
 	detectGo(&d, files, tracked)
 	detectBundler(&d, files, tracked)
 	detectCargo(&d, files, tracked)
+	detectGradle(&d, tracked)
+	detectMaven(&d, tracked)
 	return d
+}
+
+// detectGradle recognises a Gradle build by a tracked root build or settings script. Recognition, the
+// wrapper choice and protection use tracked alone; no build file is read.
+func detectGradle(d *Detected, tracked []string) {
+	if !slices.ContainsFunc([]string{"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}, func(m string) bool {
+		return slices.Contains(tracked, m)
+	}) {
+		return
+	}
+	run := "gradle check --console=plain"
+	if slices.Contains(tracked, "gradlew") {
+		run = "./gradlew check --console=plain"
+	}
+	d.Checks = append(d.Checks, Check{"gradle-check", run})
+	for _, protected := range []string{"gradlew", "gradle/wrapper/gradle-wrapper.properties", "gradle.properties"} {
+		if slices.Contains(tracked, protected) {
+			d.Protect = append(d.Protect, protected)
+		}
+	}
+}
+
+// detectMaven recognises a Maven build by a tracked root pom.xml, deciding like detectGradle.
+func detectMaven(d *Detected, tracked []string) {
+	if !slices.Contains(tracked, "pom.xml") {
+		return
+	}
+	run := "mvn -B -ntp verify"
+	if slices.Contains(tracked, "mvnw") {
+		run = "./mvnw -B -ntp verify"
+	}
+	d.Checks = append(d.Checks, Check{"maven-verify", run})
+	for _, protected := range []string{"mvnw", ".mvn/wrapper/maven-wrapper.properties"} {
+		if slices.Contains(tracked, protected) {
+			d.Protect = append(d.Protect, protected)
+		}
+	}
 }
 
 func detectMix(d *Detected, mix string, tracked []string) {

@@ -272,6 +272,71 @@ func TestDetectCargo(t *testing.T) {
 	}
 }
 
+func TestDetectGradle(t *testing.T) {
+	plain := []Check{{"gradle-check", "gradle check --console=plain"}}
+	wrapped := []Check{{"gradle-check", "./gradlew check --console=plain"}}
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"build.gradle", nil, []string{"build.gradle"}, Detected{Checks: plain}},
+		{"build.gradle.kts", nil, []string{"build.gradle.kts"}, Detected{Checks: plain}},
+		{"settings.gradle", nil, []string{"settings.gradle"}, Detected{Checks: plain}},
+		{"settings.gradle.kts", map[string]string{"settings.gradle.kts": ""}, []string{"settings.gradle.kts"}, Detected{Checks: plain}},
+		{"wrapper", nil, []string{"build.gradle", "gradlew"}, Detected{Checks: wrapped, Protect: []string{"gradlew"}}},
+		{"untracked wrapper", map[string]string{"build.gradle": "", "gradlew": ""}, []string{"build.gradle"}, Detected{Checks: plain}},
+		{"nested wrapper", nil, []string{"build.gradle", "sub/gradlew"}, Detected{Checks: plain}},
+		{"all protected", nil, []string{"gradle.properties", "gradle/wrapper/gradle-wrapper.properties", "gradlew", "build.gradle"}, Detected{Checks: wrapped, Protect: []string{"gradlew", "gradle/wrapper/gradle-wrapper.properties", "gradle.properties"}}},
+		{"properties without wrapper script", nil, []string{"settings.gradle", "gradle.properties", "gradle/wrapper/gradle-wrapper.properties"}, Detected{Checks: plain, Protect: []string{"gradle/wrapper/gradle-wrapper.properties", "gradle.properties"}}},
+		{"untracked manifest", map[string]string{"build.gradle": ""}, nil, Detected{}},
+		{"wrapper without manifest", nil, []string{"gradlew", "gradle.properties", "gradle/wrapper/gradle-wrapper.properties"}, Detected{}},
+		{"nested manifest", map[string]string{"sub/build.gradle": ""}, []string{"sub/build.gradle", "sub/settings.gradle.kts"}, Detected{}},
+		{"maven", nil, []string{"build.gradle", "pom.xml", "mvnw", "gradlew"}, Detected{Checks: []Check{wrapped[0], {"maven-verify", "./mvnw -B -ntp verify"}}, Protect: []string{"gradlew", "mvnw"}}},
+		{"go", map[string]string{"go.mod": "module x"}, []string{"go.mod", "build.gradle"}, Detected{Setup: []string{"go mod download"}, Checks: []Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}, plain[0]}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDetectMaven(t *testing.T) {
+	plain := []Check{{"maven-verify", "mvn -B -ntp verify"}}
+	wrapped := []Check{{"maven-verify", "./mvnw -B -ntp verify"}}
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"pom", map[string]string{"pom.xml": "<project/>"}, []string{"pom.xml"}, Detected{Checks: plain}},
+		{"pom without text", nil, []string{"pom.xml"}, Detected{Checks: plain}},
+		{"wrapper", nil, []string{"pom.xml", "mvnw"}, Detected{Checks: wrapped, Protect: []string{"mvnw"}}},
+		{"both wrapper files", nil, []string{".mvn/wrapper/maven-wrapper.properties", "mvnw", "pom.xml"}, Detected{Checks: wrapped, Protect: []string{"mvnw", ".mvn/wrapper/maven-wrapper.properties"}}},
+		{"properties without wrapper script", nil, []string{"pom.xml", ".mvn/wrapper/maven-wrapper.properties"}, Detected{Checks: plain, Protect: []string{".mvn/wrapper/maven-wrapper.properties"}}},
+		{"untracked wrapper", map[string]string{"pom.xml": "", "mvnw": ""}, []string{"pom.xml"}, Detected{Checks: plain}},
+		{"nested wrapper", nil, []string{"pom.xml", "sub/mvnw"}, Detected{Checks: plain}},
+		{"untracked manifest", map[string]string{"pom.xml": "<project/>"}, nil, Detected{}},
+		{"wrapper without manifest", nil, []string{"mvnw", ".mvn/wrapper/maven-wrapper.properties"}, Detected{}},
+		{"nested manifest", map[string]string{"sub/pom.xml": ""}, []string{"sub/pom.xml"}, Detected{}},
+		{"go", map[string]string{"go.mod": "module x", "pom.xml": ""}, []string{"go.mod", "pom.xml"}, Detected{Setup: []string{"go mod download"}, Checks: []Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}, plain[0]}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetectPackageManagers(t *testing.T) {
 	pkg := `{"scripts":{"check":"custom","typecheck":"tsc","lint":"eslint .","test":"jest"}}`
 	files := map[string]string{"package.json": pkg, "yarn.lock": "", "pnpm-lock.yaml": "", "package-lock.json": ""}
