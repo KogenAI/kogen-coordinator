@@ -162,6 +162,18 @@ func TestCheckoutFailsOutsideARepositoryAndForMissingDirectories(t *testing.T) {
 }
 
 func TestOwnerNamesThisProcessAndLockToken(t *testing.T) {
+	// The birth is the `ps` text with the real PATH and with no `ps` on PATH.
+	want, err := exec.Command("ps", "-p", strconv.Itoa(os.Getpid()), "-o", "lstart=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("no-ps", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		o, err := Owner("tok-1")
+		if err != nil || o.Birth != strings.TrimSpace(string(want)) || o.PID != os.Getpid() || o.Token == nil || *o.Token != "tok-1" {
+			t.Fatalf("owner %+v, %v; ps says %q", o, err, want)
+		}
+	})
 	o, err := Owner("tok-1")
 	if err != nil {
 		t.Fatal(err)
@@ -170,10 +182,6 @@ func TestOwnerNamesThisProcessAndLockToken(t *testing.T) {
 		t.Fatalf("owner %+v", o)
 	}
 	// `ps -o lstart=` prints e.g. "Thu Oct 22 16:48:03 2026".
-	want, err := exec.Command("ps", "-p", strconv.Itoa(os.Getpid()), "-o", "lstart=").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if o.Birth == "" || o.Birth != strings.TrimSpace(string(want)) || len(strings.Fields(o.Birth)) != 5 {
 		t.Errorf("birth %q, ps says %q", o.Birth, want)
 	}

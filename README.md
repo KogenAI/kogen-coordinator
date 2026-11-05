@@ -60,8 +60,10 @@ for example `git status --porcelain timed out after 1.5s`. The text never contai
 values, stdout or stderr. `Run` and `RunEnv` also return `Result{Status: -1}`. A timed-out
 `Commit` undoes a commit that landed anyway; `CommitPaths` unstages its paths. `Open` returns
 the timeout rather than `environment/not_a_git_repo`. Lock files a killed Git leaves behind
-(for example `index.lock`) are not cleaned up. The `ps` calls in `git/lock.go` and
-`project/facts.go` are not Git commands and stay unbounded.
+(for example `index.lock`) are not cleaned up. A process start time (the Build lock owner's
+birth and the legacy owner judgment in `git/lock.go`) is not a Git command: it is read from the
+operating system (the `/proc` files on Linux, `sysctl` on macOS), with `ps` as a fallback bounded
+to 5 seconds, whose timeout reads `ps -p <pid> timed out after 5s`.
 
 The seam is `git.OverrideTimeouts(command, commit)`: until the returned `restore` is called,
 the bounds of every Repo in the process are the given positive durations. No setting or

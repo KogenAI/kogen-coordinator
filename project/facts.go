@@ -8,11 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/KogenAI/kogen-coordinator/durable"
@@ -56,8 +54,8 @@ func checkoutID(gitDir string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// OwnerFacts names the process that holds a Build lock: its pid, its start time as `ps`
-// prints it and the lock's owner token (nil when no lock is held).
+// OwnerFacts names the process that holds a Build lock: its pid, its start time in the text
+// `ps -o lstart=` prints and the lock's owner token (nil when no lock is held).
 type OwnerFacts struct {
 	PID   int     `json:"pid"`
 	Birth string  `json:"birth"`
@@ -65,15 +63,16 @@ type OwnerFacts struct {
 }
 
 // Owner describes this process as the owner of the Build lock whose unique token is
-// token; an empty token records no lock. The birth is `ps -p <pid> -o lstart=`, which
-// together with the pid tells a live owner from a reused pid.
+// token; an empty token records no lock. The birth is read from the operating system, with
+// `ps` as a bounded fallback, in the `ps -o lstart=` text, which together with the pid tells
+// a live owner from a reused pid.
 func Owner(token string) (OwnerFacts, error) {
 	pid := os.Getpid()
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	birth, err := kgit.ProcessBirth(pid)
 	if err != nil {
-		return OwnerFacts{}, fmt.Errorf("ps -p %d: %w", pid, err)
+		return OwnerFacts{}, err
 	}
-	o := OwnerFacts{PID: pid, Birth: strings.TrimSpace(string(out))}
+	o := OwnerFacts{PID: pid, Birth: birth}
 	if token != "" {
 		o.Token = &token
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -370,7 +371,14 @@ func TestLegacyDirectoryOwnerMtimeStale(t *testing.T) {
 	path := lockPath(t)
 	os.MkdirAll(path, 0755)
 	owner := filepath.Join(path, "owner")
-	pid := strconv.Itoa(os.Getpid())
+	// A live process that is not this program and started after the owner file's mtime: a
+	// reused pid.
+	child := exec.Command("sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { child.Process.Kill(); child.Wait() }()
+	pid := strconv.Itoa(child.Process.Pid)
 	os.WriteFile(owner, []byte(pid), 0644)
 	old := time.Unix(1, 0)
 	os.Chtimes(owner, old, old)
@@ -394,11 +402,13 @@ func TestLegacyMissingMetadataIsStale(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+	// A pid the operating system does not know, and no ps: nothing proves the owner.
+	if err := os.WriteFile(path, []byte("424242"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", t.TempDir())
 	l := NewLock(path)
+	l.alive = func(int) bool { return true }
 	held, err := l.Held()
 	if err != nil || held {
 		t.Fatalf("Held = %v, %v", held, err)
@@ -407,5 +417,174 @@ func TestLegacyMissingMetadataIsStale(t *testing.T) {
 	defer l.Release()
 	if err != nil || res.Status != RemovedStale {
 		t.Fatalf("Acquire = %+v, %v", res, err)
+	}
+}
+
+// writeLegacyLock writes a legacy lock naming pid, plain or as a directory owner file, with
+// the owner file's mtime at mtime, and returns the lock path.
+func writeLegacyLock(t *testing.T, dir bool, pid int, mtime time.Time) string {
+	t.Helper()
+	path := lockPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	owner := path
+	if dir {
+		if err := os.Mkdir(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+		owner = filepath.Join(path, "owner")
+	}
+	if err := os.WriteFile(owner, []byte(strconv.Itoa(pid)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(owner, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A running same-user legacy owner is held with no ps on PATH and stale once it exits; a
+// live process that started after the file's mtime stays stale.
+func TestLegacyOwnerFromTheOperatingSystemWithoutPS(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, dir := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dir=%v", dir), func(t *testing.T) {
+			child := exec.Command("/bin/sleep", "30")
+			if err := child.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { child.Process.Kill(); child.Wait() }()
+			birth, err := ProcessBirth(child.Process.Pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started, err := time.ParseInLocation(birthLayout, birth, time.Local)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := writeLegacyLock(t, dir, child.Process.Pid, started.Add(time.Minute))
+			if held, err := NewLock(path).Held(); err != nil || !held {
+				t.Fatalf("running owner: Held = %v, %v", held, err)
+			}
+			if pid, _, held := LockOwner(path); !held || pid != strconv.Itoa(child.Process.Pid) {
+				t.Fatalf("running owner: LockOwner = %q %v", pid, held)
+			}
+			l := NewLock(path)
+			if res, err := l.Acquire(); err != nil || res.Status != Held {
+				t.Fatalf("running owner: Acquire = %+v, %v", res, err)
+			}
+			if err := os.Chtimes(filepath.Join(path), started.Add(time.Minute), started.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+
+			// The same pid with an mtime before the process started: a reused pid.
+			early := writeLegacyLock(t, dir, child.Process.Pid, time.Date(2020, 1, 2, 3, 4, 5, 0, time.Local))
+			if held, err := NewLock(early).Held(); err != nil || held {
+				t.Fatalf("reused pid: Held = %v, %v", held, err)
+			}
+
+			child.Process.Kill()
+			child.Wait()
+			if held, err := NewLock(path).Held(); err != nil || held {
+				t.Fatalf("exited owner: Held = %v, %v", held, err)
+			}
+			l = NewLock(path)
+			res, err := l.Acquire()
+			defer l.Release()
+			if err != nil || res.Status != RemovedStale {
+				t.Fatalf("exited owner: Acquire = %+v, %v", res, err)
+			}
+		})
+	}
+}
+
+func TestProcessBirthIsThePSText(t *testing.T) {
+	child := exec.Command("sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { child.Process.Kill(); child.Wait() }()
+	for _, pid := range []int{os.Getpid(), child.Process.Pid} {
+		want, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := ProcessBirth(pid)
+		if err != nil || got != strings.TrimSpace(string(want)) {
+			t.Errorf("ProcessBirth(%d) = %q, %v; ps says %q", pid, got, err, want)
+		}
+	}
+	child.Process.Kill()
+	child.Wait()
+	t.Setenv("PATH", t.TempDir())
+	if got, err := ProcessBirth(child.Process.Pid); err == nil {
+		t.Errorf("an exited process has birth %q", got)
+	}
+}
+
+// fakeSleepingPS puts a `ps` on PATH that runs a child sleeping past the bound before it
+// prints a birth.
+func fakeSleepingPS(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\nsleep 30\necho 'Thu Nov  5 04:11:23 2026'\n"
+	if err := os.WriteFile(filepath.Join(bin, "ps"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestPSFallbackIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for the 5 second bound")
+	}
+	fakeSleepingPS(t)
+	const absent = 99999999
+	begin := time.Now()
+	birth, err := ProcessBirth(absent)
+	if took := time.Since(begin); took > psBound+2*time.Second {
+		t.Errorf("ProcessBirth took %v", took)
+	}
+	if birth != "" || err == nil {
+		t.Fatalf("ProcessBirth = %q, %v", birth, err)
+	}
+	for _, want := range []string{"process 99999999 start time could not be read: ", "/proc/99999999/stat", "ps -p 99999999 timed out after 5s"} {
+		if runtime.GOOS == "linux" || want != "/proc/99999999/stat" {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not name %q", err, want)
+			}
+		}
+	}
+	if strings.ContainsAny(err.Error(), "\r\n") {
+		t.Errorf("error is not one line: %q", err)
+	}
+
+	// The legacy judgment: a pid the OS cannot name runs the fallback, which times out.
+	path := writeLegacyLock(t, false, 424242, time.Now())
+	l := NewLock(path)
+	l.alive = func(int) bool { return true }
+	begin = time.Now()
+	held, err := l.Held()
+	if took := time.Since(begin); took > psBound+2*time.Second {
+		t.Errorf("legacy judgment took %v", took)
+	}
+	if err != nil || held {
+		t.Errorf("Held = %v, %v", held, err)
+	}
+}
+
+func TestProcessBirthNamesBothAttempts(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	birth, err := ProcessBirth(99999999)
+	if birth != "" || err == nil {
+		t.Fatalf("ProcessBirth = %q, %v", birth, err)
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "process 99999999 start time could not be read: ") || strings.ContainsAny(msg, "\r\n") {
+		t.Errorf("error %q", msg)
+	}
+	if !strings.Contains(msg, "; ps -p 99999999: ") || !strings.Contains(msg, "executable file not found") {
+		t.Errorf("error %q does not name the ps attempt", msg)
 	}
 }

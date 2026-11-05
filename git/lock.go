@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -293,31 +292,20 @@ func (l *Lock) isAlive(pid string) bool {
 }
 
 // legacyHeld requires both liveness and same-user process metadata consistent with
-// the legacy file. A failed or incomplete ps observation cannot prove ownership.
+// the legacy file. A failed or incomplete observation cannot prove ownership.
 func (l *Lock) legacyHeld(pid string, mtime time.Time) bool {
 	if !l.isAlive(pid) {
 		return false
 	}
-	cmd := exec.Command("ps", "-p", pid, "-o", "uid=", "-o", "comm=", "-o", "lstart=")
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	output, err := cmd.Output()
-	if err != nil {
+	n, _ := strconv.Atoi(pid)
+	obs, err := observeProcess(n)
+	if err != nil || obs.uid != os.Geteuid() {
 		return false
 	}
-	fields := strings.Fields(string(output))
-	if len(fields) < 7 {
-		return false
-	}
-	uid, err := strconv.Atoi(fields[0])
-	if err != nil || uid != os.Geteuid() {
-		return false
-	}
-	exe, err := os.Executable()
-	if err == nil && filepath.Base(strings.Join(fields[1:len(fields)-5], " ")) == filepath.Base(exe) {
+	if exe, err := os.Executable(); err == nil && filepath.Base(obs.name) == filepath.Base(exe) {
 		return true
 	}
-	started, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(fields[len(fields)-5:], " "), time.Local)
-	return err == nil && !started.After(mtime)
+	return !time.Unix(obs.start, 0).After(mtime)
 }
 
 // processAlive is `kill -0`: the process exists (even one we may not signal).
