@@ -69,6 +69,22 @@ The seam is `git.OverrideTimeouts(command, commit)`: until the returned `restore
 the bounds of every Repo in the process are the given positive durations. No setting or
 configuration key changes them.
 
+## Run records
+
+`durable.RunStore` keeps one JSON record per run ID at `<root>/<id>.json`. `Append` and `Finish`
+serialize the read, change and replace of a record per run ID across goroutines and processes
+with an exclusive advisory `flock` on the lock file `<root>/<id>.lock`, next to the record. The
+lock file is created when missing, never removed and not listed by `List`; the kernel drops the
+lock when its holder ends in any way, so a lock file left by a dead process never blocks. Records
+of different run IDs never wait for each other. `Read` takes no lock.
+
+A call that has not obtained the lock within `durable.RunLockWait` (10 seconds) returns, without
+reading or writing the record, the error `run record "<id>": lock still held after <wait>`, for
+example `run record "held": lock still held after 300ms`. The seam is
+`durable.OverrideRunLockWait(wait)`: until the returned `restore` is called, every `RunStore` in
+the process waits at most the given positive duration. No setting or configuration key changes
+the wait.
+
 ## Getting started
 
 Install Go 1.27.2 or newer, as required by `go.mod`. Clone the public repository and enter it:
