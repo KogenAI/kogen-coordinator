@@ -13,6 +13,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +23,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/KogenAI/kogen-loop/sys"
 )
@@ -60,7 +63,10 @@ func OpenReadOnly(dir string, env []string) (*Repo, error) {
 }
 
 func open(probe *Repo, dir string) (*Repo, error) {
-	root, ok := probe.root(dir)
+	root, ok, err := probe.discover(dir)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, sys.Fail("environment", "not_a_git_repo", dir+"; run git init first", 3)
 	}
@@ -71,18 +77,27 @@ func open(probe *Repo, dir string) (*Repo, error) {
 
 // Root is the repository root containing dir, expressed through the caller's own path when
 // that is a symlinked form of the real one; false outside a work tree.
-func Root(dir string, env []string) (string, bool) { return (&Repo{Env: env}).root(dir) }
+func Root(dir string, env []string) (string, bool) {
+	root, ok, _ := (&Repo{Env: env}).discover(dir)
+	return root, ok
+}
 
-func (r *Repo) root(dir string) (string, bool) {
+// discover is Root with the error of a discovery that timed out; any other failure is
+// "not a repository".
+func (r *Repo) discover(dir string) (string, bool, error) {
 	res, err := r.exec(dir, nil, nil, nil, "rev-parse", "--show-toplevel")
+	var te *TimeoutError
+	if errors.As(err, &te) {
+		return "", false, te
+	}
 	if err != nil || res.Status != 0 {
-		return "", false
+		return "", false, nil
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
-	return logicalRoot(abs, strings.TrimSpace(res.Stdout)), true
+	return logicalRoot(abs, strings.TrimSpace(res.Stdout)), true, nil
 }
 
 func logicalRoot(dir, top string) string {
@@ -277,10 +292,22 @@ func (r *Repo) gitBinary() string {
 }
 
 func (r *Repo) exec(dir string, extra []string, stdin io.Reader, stdout io.Writer, args ...string) (Result, error) {
+	bound := commandTimeout()
+	callerArgs := args
 	if r.ReadOnly {
 		args = append([]string{"-c", "core.fsmonitor=false"}, args...)
 	}
-	cmd := exec.Command(r.gitBinary(), args...)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, r.gitBinary(), args...)
+	var timedOut atomic.Bool
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		timedOut.Store(true)
+		killGroup(cmd.Process.Pid)
+		return nil
+	}
+	cmd.WaitDelay = time.Second
 	cmd.Dir = dir
 	cmd.Env = r.environ(extra)
 	cmd.Stdin = stdin
@@ -292,7 +319,14 @@ func (r *Repo) exec(dir string, extra []string, stdin io.Reader, stdout io.Write
 	}
 	cmd.Stderr = &errb
 	err := cmd.Run()
+	if timedOut.Load() {
+		return Result{Status: -1}, timeoutError(callerArgs, bound)
+	}
 	res := Result{Stdout: out.String(), Stderr: errb.String()}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The command finished; a process outside its group kept a pipe open.
+		err = nil
+	}
 	if err != nil {
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) {

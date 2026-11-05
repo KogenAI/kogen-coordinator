@@ -47,11 +47,16 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {
 	if err := os.WriteFile(spec.MessageFile, []byte(CommitMessage(spec.Title, spec.Slug)), 0o644); err != nil {
 		return "", err
 	}
-	res, err := s.Run(UnsetPrefix()+"git commit -q -F "+shellQuote(spec.MessageFile), r.Dir,
-		sys.Options{FinishOnInterrupt: true, KillGroupOnExit: true})
+	bound := commitTimeout()
+	res, err := runHooked(s, UnsetPrefix()+"git commit -q -F "+shellQuote(spec.MessageFile), r.Dir,
+		sys.Options{FinishOnInterrupt: true, KillGroupOnExit: true}, bound)
 	if err != nil {
 		r.undoIfLanded(spec.Start)
 		return "", err
+	}
+	if res.TimedOut {
+		r.undoIfLanded(spec.Start)
+		return "", timeoutError([]string{"commit", "-q", "-F", spec.MessageFile}, bound)
 	}
 	if res.Status != 0 {
 		return "", &sys.Error{
@@ -192,9 +197,14 @@ func (r *Repo) CheckCommitMsg(s *sys.Session, title, slug string) error {
 		return err
 	}
 	defer os.Remove(msg)
-	res, err := s.Run(UnsetPrefix()+"git hook run --ignore-missing commit-msg -- "+shellQuote(msg), r.Dir, sys.Options{KillGroupOnExit: true})
+	bound := commitTimeout()
+	res, err := runHooked(s, UnsetPrefix()+"git hook run --ignore-missing commit-msg -- "+shellQuote(msg), r.Dir,
+		sys.Options{KillGroupOnExit: true}, bound)
 	if err != nil {
 		return err
+	}
+	if res.TimedOut {
+		return timeoutError([]string{"hook", "run", "--ignore-missing", "commit-msg"}, bound)
 	}
 	if res.Status != 0 {
 		return &sys.Error{
@@ -235,16 +245,21 @@ func (r *Repo) CommitPaths(s *sys.Session, subject string, paths []string, hadHe
 	for i, p := range paths {
 		quoted[i] = shellQuote(p)
 	}
-	res, err := s.Run(UnsetPrefix()+"git commit -q -F "+shellQuote(msg)+" -- "+strings.Join(quoted, " "), r.Dir, sys.Options{KillGroupOnExit: true})
+	bound := commitTimeout()
+	res, err := runHooked(s, UnsetPrefix()+"git commit -q -F "+shellQuote(msg)+" -- "+strings.Join(quoted, " "), r.Dir,
+		sys.Options{KillGroupOnExit: true}, bound)
 	if err != nil {
 		return "", err
 	}
-	if res.Status != 0 {
+	if res.TimedOut || res.Status != 0 {
 		unstage := []string{"rm", "-q", "--cached", "--"}
 		if hadHead {
 			unstage = []string{"restore", "--staged", "--"}
 		}
 		r.exec(r.Dir, nil, nil, nil, append(unstage, paths...)...)
+		if res.TimedOut {
+			return "", timeoutError([]string{"commit", "-q", "-F", msg}, bound)
+		}
 		return "", &sys.Error{
 			Class: "environment", Reason: "commit_failed", Exit: 3,
 			Detail: fmt.Sprintf("git commit failed (status %d); the configuration is left uncommitted", res.Status),

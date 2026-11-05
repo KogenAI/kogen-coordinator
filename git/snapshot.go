@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/KogenAI/kogen-loop/sys"
 )
@@ -420,18 +422,40 @@ func hashed(res Result, err error, want []string) error {
 	return nil
 }
 
+// lockedBuffer collects a process's stderr while the reader may already inspect it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
 // blobStream reads blobs from one `git cat-file --batch` process.
 type blobStream struct {
-	cmd  *exec.Cmd
-	in   io.WriteCloser
-	out  *bufio.Reader
-	errb *bytes.Buffer
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	pipe   io.Closer
+	out    *bufio.Reader
+	errb   *lockedBuffer
+	closed bool
 }
 
 func (r *Repo) openBlobs() (*blobStream, error) {
 	cmd := exec.Command(r.gitBinary(), "cat-file", "--batch")
 	cmd.Dir = r.Dir
 	cmd.Env = r.environ(nil)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = time.Second
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -440,7 +464,7 @@ func (r *Repo) openBlobs() (*blobStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &blobStream{cmd: cmd, in: in, out: bufio.NewReader(out), errb: &bytes.Buffer{}}
+	b := &blobStream{cmd: cmd, in: in, pipe: out, out: bufio.NewReader(out), errb: &lockedBuffer{}}
 	cmd.Stderr = b.errb
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("git: %w", err)
@@ -448,8 +472,28 @@ func (r *Repo) openBlobs() (*blobStream, error) {
 	return b, nil
 }
 
-// copy writes the content of blob oid to w.
+// copy writes the content of blob oid to w. The request, header and content must arrive
+// within the command bound, measured from the request; past it the stream's process group
+// is killed, the stream is closed and the read returns the *TimeoutError.
 func (b *blobStream) copy(oid string, w io.Writer) error {
+	bound := commandTimeout()
+	fired := make(chan struct{})
+	timer := time.AfterFunc(bound, func() {
+		defer close(fired)
+		killGroup(b.cmd.Process.Pid)
+		b.in.Close()
+		b.pipe.Close()
+	})
+	err := b.read(oid, w)
+	if !timer.Stop() {
+		<-fired
+		b.close()
+		return timeoutError([]string{"cat-file", "--batch"}, bound)
+	}
+	return err
+}
+
+func (b *blobStream) read(oid string, w io.Writer) error {
 	if _, err := io.WriteString(b.in, oid+"\n"); err != nil {
 		return b.fail(oid, err)
 	}
@@ -478,9 +522,17 @@ func (b *blobStream) fail(oid string, err error) error {
 	return fmt.Errorf("git cat-file %s: %w: %s", oid, err, strings.TrimSpace(b.errb.String()))
 }
 
+// close ends the stream and waits for its process; a process that has not ended within the
+// command bound is killed with its group.
 func (b *blobStream) close() {
+	if b.closed {
+		return
+	}
+	b.closed = true
 	b.in.Close()
+	timer := time.AfterFunc(commandTimeout(), func() { killGroup(b.cmd.Process.Pid) })
 	b.cmd.Wait()
+	timer.Stop()
 }
 
 func inputs(dir string, paths []string) (map[string]Input, error) {

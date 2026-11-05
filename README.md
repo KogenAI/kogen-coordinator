@@ -40,6 +40,33 @@ when the team file is absent. The local path is not automatically protected; exp
 patterns continue to apply. Thus local-only changes do not affect the ordinary approval hash,
 while adding or changing the team file does.
 
+## Git command deadlines
+
+Every Git command the `git` package runs for a repository has a bounded wall time, so a stuck
+hook, a lock held by a dead tool or a hung filesystem cannot block a Build silently.
+
+- `git.CommandTimeout` (10 minutes) bounds every command run through the package's runner
+  (`Run`, `RunEnv`, `OK`, `OKEnv` and every internal call), and each read from the
+  `git cat-file --batch` blob stream (request, header and content of one blob, measured from
+  its request), so a large materialization runs as long as every blob keeps arriving.
+- `git.CommitTimeout` (1 hour) bounds the commands that run the user's commit hooks: the
+  `git commit` of `Commit` and `CommitPaths`, and the `git hook run --ignore-missing commit-msg`
+  of `CheckCommitMsg`.
+
+Each command runs in its own process group. At its bound the whole group is killed with
+SIGKILL, so Git and its children (hooks, `sleep`, ...) stop, and the caller receives a
+`*git.TimeoutError` whose text is `git <first at most four arguments> timed out after <bound>`,
+for example `git status --porcelain timed out after 1.5s`. The text never contains environment
+values, stdout or stderr. `Run` and `RunEnv` also return `Result{Status: -1}`. A timed-out
+`Commit` undoes a commit that landed anyway; `CommitPaths` unstages its paths. `Open` returns
+the timeout rather than `environment/not_a_git_repo`. Lock files a killed Git leaves behind
+(for example `index.lock`) are not cleaned up. The `ps` calls in `git/lock.go` and
+`project/facts.go` are not Git commands and stay unbounded.
+
+The seam is `git.OverrideTimeouts(command, commit)`: until the returned `restore` is called,
+the bounds of every Repo in the process are the given positive durations. No setting or
+configuration key changes them.
+
 ## Getting started
 
 Install Go 1.27.2 or newer, as required by `go.mod`. Clone the public repository and enter it:
