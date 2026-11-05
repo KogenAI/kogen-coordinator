@@ -30,8 +30,8 @@ type CommitSpec struct {
 // the caller restores its custody copy:
 //
 //	environment/commit_failed       git commit exited non-zero (exit 3, Git's output as lines)
-//	candidate/hook_changed_commit   the commit's parent, tree or signature is not as reviewed
-//	                                (exit 1); the commit has been undone
+//	candidate/hook_changed_commit   the commit's parent, tree, signature or Kogen-Intent
+//	                                trailer is not as reviewed (exit 1); the commit has been undone
 //	*sys.Interrupted                the caller interrupted; Commit waited for git commit to
 //	                                finish and undid the commit if it landed (CLI-7)
 func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {
@@ -67,7 +67,8 @@ var gpgsigRE = regexp.MustCompile(`(?m)^gpgsig(-sha256)? `)
 
 // landed reads the commit from the repository. A commit whose parent is not the start
 // HEAD, whose tree is not the reviewed one, or that is unsigned although the user's
-// configuration signs, is undone (GIT-6).
+// configuration signs, is undone (GIT-6). So is a commit whose message does not carry
+// exactly one Kogen-Intent trailer with the Build's slug.
 func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {
 	head := r.Head()
 	if head == "" {
@@ -106,6 +107,20 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {
 			Detail: "a commit hook changed " + strings.Join(paths, ", ") + "; the commit was undone and the changes are left in place",
 		}
 	}
+	trailers, err := r.intentTrailers(head)
+	if err != nil {
+		return "", err
+	}
+	if detail := trailerProblem(trailers, spec.Slug); detail != "" {
+		if err := r.undo(spec.Start, head); err != nil {
+			return "", err
+		}
+		return "", &sys.Error{
+			Class: "candidate", Reason: "hook_changed_commit", Exit: 1,
+			Detail: "a commit hook changed the commit message: it no longer carries the Intent trailer Kogen-Intent: " +
+				spec.Slug + " (" + detail + "); the commit was undone and the changes are left in place",
+		}
+	}
 	// The commit is still ours to undo until every query has completed.
 	if err := s.Err(); err != nil {
 		if uerr := r.undo(spec.Start, head); uerr != nil {
@@ -114,6 +129,40 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {
 		return "", err
 	}
 	return head, nil
+}
+
+// intentTrailers are the values of the Kogen-Intent trailers Git's trailer parser reports
+// for the commit (its final trailer block, key matched case-insensitively), in message order.
+// Keys are printed too, so that a trailer with an empty value is still one trailer.
+func (r *Repo) intentTrailers(head string) ([]string, error) {
+	out, err := r.ok(nil, "log", "-1", "--no-show-signature",
+		"--format=%(trailers:key=Kogen-Intent,separator=%x00,key_value_separator=%x01)", head)
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSuffix(out, "\n")
+	if out == "" {
+		return nil, nil
+	}
+	var values []string
+	for _, t := range strings.Split(out, "\x00") {
+		_, value, _ := strings.Cut(t, "\x01")
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+// trailerProblem is why the trailers are not exactly one Kogen-Intent: slug, or "" when they are.
+func trailerProblem(values []string, slug string) string {
+	switch {
+	case len(values) == 0:
+		return "no Kogen-Intent trailer found"
+	case len(values) > 1:
+		return "duplicate Kogen-Intent trailers: " + strings.Join(values, ", ")
+	case values[0] != slug:
+		return "found Kogen-Intent: " + values[0]
+	}
+	return ""
 }
 
 // undo moves HEAD back from Kogen's own just-made commit with a compare-and-swap; the

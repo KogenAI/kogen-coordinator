@@ -418,3 +418,65 @@ func TestCommitMsgHookThatStagesIsUndoneByIndexRestore(t *testing.T) {
 func TestCommitMessageRetryExact(t *testing.T) {
 	equal(t, "message", CommitMessage("Add retry to export", "demo"), "Add retry to export\n\nKogen-Intent: demo\n")
 }
+
+func TestCommitLandsWhenAHookKeepsTheIntentTrailer(t *testing.T) {
+	for name, c := range map[string]struct{ script, want string }{
+		"signed-off-by": {
+			"printf 'Signed-off-by: Fixture <fixture@example.invalid>\\n' >> \"$1\"\n",
+			"Add the app\n\nKogen-Intent: add-app\nSigned-off-by: Fixture <fixture@example.invalid>\n",
+		},
+		"reworded title": {
+			"{ printf 'Reworded title\\n'; tail -n +2 \"$1\"; } > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+			"Reworded title\n\nKogen-Intent: add-app\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, spec := candidate(t)
+			f.hook(t, "commit-msg", c.script)
+			s, _ := f.session()
+			head := must(f.Commit(s, spec))
+			equal(t, "head", f.Head(), head)
+			raw := f.git(t, "cat-file", "commit", head)
+			equal(t, "message", raw[strings.Index(raw, "\n\n")+2:], c.want)
+		})
+	}
+}
+
+func TestCommitUndoesACommitWhoseHookBrokeTheIntentTrailer(t *testing.T) {
+	const prefix = "a commit hook changed the commit message: it no longer carries the Intent trailer Kogen-Intent: add-app ("
+	const suffix = "); the commit was undone and the changes are left in place"
+	for name, c := range map[string]struct{ hook, script, problem string }{
+		"removed by commit-msg":         {"commit-msg", "printf 'Add the app\\n' > \"$1\"\n", "no Kogen-Intent trailer found"},
+		"removed by prepare-commit-msg": {"prepare-commit-msg", "printf 'Add the app\\n' > \"$1\"\n", "no Kogen-Intent trailer found"},
+		"replaced":                      {"commit-msg", "printf 'Add the app\\n\\nKogen-Intent: other-slug\\n' > \"$1\"\n", "found Kogen-Intent: other-slug"},
+		"replaced by an empty value":    {"commit-msg", "printf 'Add the app\\n\\nKogen-Intent:\\n' > \"$1\"\n", "found Kogen-Intent: "},
+		"duplicated with another value": {"commit-msg", "printf 'Kogen-Intent: other-slug\\n' >> \"$1\"\n", "duplicate Kogen-Intent trailers: add-app, other-slug"},
+		"duplicated with the same slug": {"commit-msg", "printf 'Kogen-Intent: add-app\\n' >> \"$1\"\n", "duplicate Kogen-Intent trailers: add-app, add-app"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, spec := candidate(t)
+			f.hook(t, c.hook, c.script)
+			s, _ := f.session()
+			head, err := f.Commit(s, spec)
+			equal(t, "head returned", head, "")
+			e := wantSysError(t, err, "candidate", "hook_changed_commit", 1)
+			equal(t, "detail", e.Detail, prefix+c.problem+suffix)
+			equal(t, "no lines", len(e.Lines), 0)
+			equal(t, "head back at start", f.Head(), spec.Start)
+			equal(t, "undo is the latest reflog entry", f.git(t, "reflog", "-1", "--format=%gs"), "kogen: undo the unverified commit\n")
+			equal(t, "edit stays", string(must(os.ReadFile(filepath.Join(f.Dir, "app.txt")))), "verified edit\n")
+			equal(t, "status", f.git(t, "status", "--porcelain"), "M  README.md\nA  app.txt\n")
+		})
+	}
+}
+
+func TestCommitReportsTheTreeChangeBeforeALostTrailer(t *testing.T) {
+	f, spec := candidate(t)
+	f.hook(t, "pre-commit", "printf 'hook edit\\n' > hook-made.txt\ngit add hook-made.txt\n")
+	f.hook(t, "commit-msg", "printf 'Add the app\\n' > \"$1\"\n")
+	s, _ := f.session()
+	_, err := f.Commit(s, spec)
+	e := wantSysError(t, err, "candidate", "hook_changed_commit", 1)
+	equal(t, "detail", e.Detail, "a commit hook changed hook-made.txt; the commit was undone and the changes are left in place")
+	equal(t, "head", f.Head(), spec.Start)
+}
