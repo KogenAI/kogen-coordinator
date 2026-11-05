@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestCommitLandsTheReviewedTree(t *testing.T) {
 	equal(t, "parent", strings.TrimSpace(f.log(t, "%P")), spec.Start)
 	equal(t, "tree", strings.TrimSpace(f.log(t, "%T")), spec.Tree)
 	equal(t, "author", strings.TrimSpace(f.log(t, "%an <%ae> / %cn <%ce>")), "Fixture <fixture@example.invalid> / Fixture <fixture@example.invalid>")
-	equal(t, "message file", string(must(os.ReadFile(spec.MessageFile))), "Add the app\n\nKogen-Intent: add-app\n")
+	assertNothingAt(t, spec.MessageFile)
 	equal(t, "one commit", strings.TrimSpace(f.git(t, "rev-list", "--count", spec.Start+"..HEAD")), "1")
 	equal(t, "index", bytes.Equal(must(f.IndexBytes()), indexBefore), false)
 	// The file added after the snapshot is not in the commit and stays in the work tree.
@@ -338,6 +339,7 @@ func TestInterruptDuringCommitWaitsForGitAndUndoesALandedCommit(t *testing.T) {
 		t.Fatalf("error = %v, want *sys.Interrupted", r.err)
 	}
 	equal(t, "head undone", f.Head(), spec.Start)
+	assertNothingAt(t, spec.MessageFile)
 	equal(t, "edit stays", string(must(os.ReadFile(filepath.Join(f.Dir, "app.txt")))), "verified edit\n")
 }
 
@@ -394,7 +396,7 @@ func TestCommitMsgHookThatStagesIsUndoneByIndexRestore(t *testing.T) {
 			f.git(t, "add", "app.txt")
 			f.git(t, "commit", "-qm", "app")
 			backup := filepath.Join(t.TempDir(), "index-at-start")
-			must(0, f.SaveIndex(backup))
+			noErr(t, f.SaveIndex(backup))
 			before := must(f.IndexBytes())
 			f.hook(t, "commit-msg", fmt.Sprintf("printf 'hook edit\\n' > app.txt\ngit add app.txt\nexit %d\n", exit))
 			s, _ := f.session()
@@ -406,7 +408,7 @@ func TestCommitMsgHookThatStagesIsUndoneByIndexRestore(t *testing.T) {
 				wantSysError(t, err, "environment", "commit_rejected", 3)
 			}
 			equal(t, "hook staged its edit", f.git(t, "diff", "--cached", "--name-only"), "app.txt\n")
-			must(0, f.RestoreIndex(backup))
+			noErr(t, f.RestoreIndex(backup))
 			if !bytes.Equal(must(f.IndexBytes()), before) {
 				t.Fatal("the index is not what it was")
 			}
@@ -479,4 +481,143 @@ func TestCommitReportsTheTreeChangeBeforeALostTrailer(t *testing.T) {
 	e := wantSysError(t, err, "candidate", "hook_changed_commit", 1)
 	equal(t, "detail", e.Detail, "a commit hook changed hook-made.txt; the commit was undone and the changes are left in place")
 	equal(t, "head", f.Head(), spec.Start)
+}
+
+// assertNothingAt fails when anything, even a dangling link, exists at path.
+func assertNothingAt(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("Lstat(%s) = %v, want nothing at the path", path, err)
+	}
+}
+
+// recordingGit puts a git first on the fixture's PATH that logs every invocation and, for
+// `commit -q -F <file>`, the file's kind, mode and text as git commit finds them.
+func recordingGit(t *testing.T, f *fixture) (s *sys.Session, log, seen string) {
+	t.Helper()
+	bin, out := t.TempDir(), t.TempDir()
+	log, seen = filepath.Join(out, "log"), filepath.Join(out, "seen")
+	realGit := must(exec.LookPath("git"))
+	os.WriteFile(filepath.Join(bin, "git"), []byte(fmt.Sprintf(`#!/bin/sh
+umask 022
+echo "$*" >> '%[1]s'
+if [ "$1" = commit ]; then
+  { if [ -f "$4" ] && [ ! -L "$4" ]; then echo regular; else echo other; fi; stat -c %%a "$4"; cat "$4"; } > '%[2]s'
+fi
+exec '%[3]s' "$@"
+`, log, seen, realGit)), 0o755)
+	env := append(append([]string{}, f.Env...), "PATH="+bin+":"+os.Getenv("PATH"))
+	f.Repo.Env = env
+	return sys.NewWith(env, f.Dir), log, seen
+}
+
+func TestCommitCreatesThePrivateMessageFileAndRemovesIt(t *testing.T) {
+	const message = "Add the app\n\nKogen-Intent: add-app\n"
+	for _, name := range []string{"fresh", "leftover"} {
+		t.Run(name, func(t *testing.T) {
+			f, spec := candidate(t)
+			s, _, seen := recordingGit(t, f)
+			if name == "leftover" {
+				old := "Old title from an interrupted commit\n\nA body line that is longer than the new message.\n\nKogen-Intent: old-slug\n"
+				noErr(t, os.WriteFile(spec.MessageFile, []byte(old), 0o644))
+				noErr(t, os.Chmod(spec.MessageFile, 0o644))
+			}
+			if _, err := f.Commit(s, spec); err != nil {
+				t.Fatal(err)
+			}
+			equal(t, "file git found", string(must(os.ReadFile(seen))), "regular\n600\n"+message)
+			equal(t, "landed", f.log(t, "%B"), message+"\n")
+			assertNothingAt(t, spec.MessageFile)
+		})
+	}
+}
+
+func TestCommitMessageFileIsPrivateWhateverTheUmask(t *testing.T) {
+	f, spec := candidate(t)
+	s, _, seen := recordingGit(t, f)
+	// A umask that removes the owner's write bit: the file must still be exactly 0600 while git
+	// runs (the fake git resets its own umask before it records and runs the real git).
+	defer syscall.Umask(syscall.Umask(0o277))
+	if _, err := f.Commit(s, spec); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "mode", strings.Fields(string(must(os.ReadFile(seen))))[1], "600")
+}
+
+func TestCommitRefusesAMessagePathThatIsNotARegularFile(t *testing.T) {
+	setup := map[string]func(t *testing.T, path string){
+		"link to a victim": func(t *testing.T, path string) {
+			victim := filepath.Join(filepath.Dir(path), "victim")
+			noErr(t, os.WriteFile(victim, []byte("victim bytes that must not change\n"), 0o644))
+			noErr(t, os.Symlink(victim, path))
+		},
+		"link to a missing file": func(t *testing.T, path string) {
+			noErr(t, os.Symlink(filepath.Join(filepath.Dir(path), "missing"), path))
+		},
+		"directory": func(t *testing.T, path string) { must(0, os.Mkdir(path, 0o755)) },
+	}
+	for name, arrange := range setup {
+		t.Run(name, func(t *testing.T) {
+			f, spec := candidate(t)
+			s, log, _ := recordingGit(t, f)
+			arrange(t, spec.MessageFile)
+			dir := filepath.Dir(spec.MessageFile)
+			entries := func() string {
+				var names []string
+				for _, e := range must(os.ReadDir(dir)) {
+					names = append(names, e.Name())
+				}
+				return strings.Join(names, ",")
+			}
+			before := entries()
+			target, linkErr := os.Readlink(spec.MessageFile)
+			reason := "it is a symbolic link"
+			if name == "directory" {
+				reason = "it is not a regular file"
+			}
+			os.Remove(log)
+			head, err := f.Commit(s, spec)
+			equal(t, "head", head, "")
+			if err == nil || err.Error() != "git: refusing the commit message file "+spec.MessageFile+": "+reason {
+				t.Fatalf("error = %v", err)
+			}
+			if _, ok := err.(*sys.Error); ok {
+				t.Fatalf("error %v is a *sys.Error, want a plain error", err)
+			}
+			if _, statErr := os.Stat(log); !os.IsNotExist(statErr) {
+				t.Fatalf("git ran: %s", must(os.ReadFile(log)))
+			}
+			equal(t, "head unchanged", f.Head(), spec.Start)
+			equal(t, "directory", entries(), before)
+			if name == "directory" {
+				if info := must(os.Lstat(spec.MessageFile)); !info.IsDir() {
+					t.Fatal("the directory was replaced")
+				}
+				return
+			}
+			got, err := os.Readlink(spec.MessageFile)
+			equal(t, "link", got, target)
+			equal(t, "link error", fmt.Sprint(err), fmt.Sprint(linkErr))
+			if name == "link to a victim" {
+				equal(t, "victim", string(must(os.ReadFile(target))), "victim bytes that must not change\n")
+			}
+		})
+	}
+}
+
+func TestCommitRemovesTheMessageFileWhenReadTreeFails(t *testing.T) {
+	f, spec := candidate(t)
+	spec.Tree = strings.Repeat("0", 40)
+	s, _ := f.session()
+	if _, err := f.Commit(s, spec); err == nil {
+		t.Fatal("a missing tree committed")
+	}
+	assertNothingAt(t, spec.MessageFile)
+}
+
+func noErr(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

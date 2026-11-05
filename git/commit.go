@@ -19,12 +19,21 @@ type CommitSpec struct {
 	Tree        string // the reviewed candidate snapshot
 	Start       string // HEAD recorded when the Build started
 	Title, Slug string // the Intent's title and slug
-	MessageFile string // where the message is written for `git commit -F` (the run's commit-message.txt)
+	// MessageFile is where the message is written for `git commit -F` (the run's
+	// commit-message.txt). Commit creates it private (0600, exclusively), replaces a regular
+	// leftover, refuses a symbolic link or other non-regular file before any Git command, and
+	// removes it before it returns, whatever the outcome.
+	MessageFile string
 }
 
 // Commit stages Tree as the user's index, runs a plain `git commit -q -F <message>` and
 // checks the result in the repository (GIT-3..6). Kogen adds no signing or hook options
 // of its own: the user's identity, hooks and signing apply.
+//
+// The message file is prepared before any Git command runs: a regular leftover is removed,
+// a symbolic link or other non-regular file at the path is refused with a plain error and
+// left as it is, and the file is created exclusively with mode 0600. It is removed before
+// Commit returns, on every path; the landed message stays readable from the commit.
 //
 // It returns the new commit id. Failures leave the user's index as the commit left it;
 // the caller restores its custody copy:
@@ -41,10 +50,11 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {
 	if err := errors.Join(checkRev(spec.Tree), checkRev(spec.Start)); err != nil {
 		return "", err
 	}
-	if err := r.ReadTree(spec.Tree); err != nil {
+	if err := writeMessageFile(spec.MessageFile, CommitMessage(spec.Title, spec.Slug)); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(spec.MessageFile, []byte(CommitMessage(spec.Title, spec.Slug)), 0o644); err != nil {
+	defer os.Remove(spec.MessageFile)
+	if err := r.ReadTree(spec.Tree); err != nil {
 		return "", err
 	}
 	bound := commitTimeout()
@@ -66,6 +76,41 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {
 		}
 	}
 	return r.landed(s, spec)
+}
+
+// writeMessageFile creates the commit message file private: a regular leftover is removed, a
+// symbolic link or other non-regular file is refused untouched, and the new file is created
+// exclusively (which never follows a link) with mode 0600 whatever the umask. A file it
+// could not complete is removed.
+func writeMessageFile(path, message string) error {
+	if info, err := os.Lstat(path); err == nil {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("git: refusing the commit message file %s: it is a symbolic link", path)
+		case !info.Mode().IsRegular():
+			return fmt.Errorf("git: refusing the commit message file %s: it is not a regular file", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	err = f.Chmod(0o600)
+	if err == nil {
+		_, err = f.WriteString(message)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
 
 var gpgsigRE = regexp.MustCompile(`(?m)^gpgsig(-sha256)? `)

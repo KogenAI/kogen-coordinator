@@ -266,6 +266,7 @@ func TestCommitStopsAHangingHookAtTheCommitBound(t *testing.T) {
 			wantWithinBound(t, start)
 			assertStopped(t, pids)
 			equal(t, "head", f.Head(), spec.Start)
+			assertNothingAt(t, spec.MessageFile)
 		})
 	}
 }

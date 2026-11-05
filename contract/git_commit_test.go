@@ -46,7 +46,7 @@ func TestCommitLandsTheReviewedTreeWithTheIntentTrailer(t *testing.T) {
 	equal(t, "returned", head, f.Head())
 	equal(t, "message", f.log(t, "%B"), "Add the app\n\nKogen-Intent: add-app\n\n")
 	equal(t, "trailer", strings.TrimSpace(f.log(t, "%(trailers:key=Kogen-Intent,valueonly)")), "add-app")
-	equal(t, "message file", readFile(t, spec.MessageFile), "Add the app\n\nKogen-Intent: add-app\n")
+	assertNothingAt(t, spec.MessageFile)
 	equal(t, "parent", strings.TrimSpace(f.log(t, "%P")), spec.Start)
 	equal(t, "tree", strings.TrimSpace(f.log(t, "%T")), spec.Tree)
 	equal(t, "author", strings.TrimSpace(f.log(t, "%an <%ae>")), fixtureIdentity)
@@ -74,6 +74,15 @@ func TestCommitFailureLeavesHeadAndTheStagedCandidate(t *testing.T) {
 	equal(t, "detail", e.Detail, "git commit failed (status 1); the verified changes are left uncommitted")
 	equalList(t, "lines", e.Lines, []string{"pre-commit says no"})
 	equal(t, "HEAD", f.Head(), spec.Start)
+	assertNothingAt(t, spec.MessageFile)
+}
+
+// assertNothingAt fails when anything exists at path.
+func assertNothingAt(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("Lstat(%s) = %v, want nothing at the path", path, err)
+	}
 }
 
 // commit-rejected: kogen-build build/build_test.go checks the commit message before any model

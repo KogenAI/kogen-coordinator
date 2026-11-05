@@ -57,7 +57,7 @@ Each item is asserted so that changing it fails the suite.
 - `source-path`, `source-receipt-version`, `TestCaptureSourcePublishesTheVersionOneReceipt`: the receipt's path, version and contract hash.
 - `source-ref-map`, `TestSourceRefMapRoundTrip`: `SourceRef.Map` and `SourceRefFromMap`.
 - `source-refused` and `source-message`, `TestSourceCustodyAndMessages`: the custody refusal and the legacy message.
-- `commit-message`, `TestCommitLandsTheReviewedTreeWithTheIntentTrailer`: the commit message and its `Kogen-Intent` trailer.
+- `commit-message`, `TestCommitLandsTheReviewedTreeWithTheIntentTrailer`: the commit message and its `Kogen-Intent` trailer; the message file is created with mode 0600 and removed after the commit.
 - `commit-rejected`, `TestCheckCommitMsgRunsTheCommitMsgHook`: the commit-msg refusal.
 - `lock-path`, `build-running` and `lock-diagnostics`, `TestBuildLock`: the Build lock's path, refusal and diagnostics.
 - `changed-paths-rename`, `TestChangedPathsReportsARenameNewPathFirst`: a rename lists the new path, then the old one.
@@ -68,7 +68,7 @@ Each item is asserted so that changing it fails the suite.
 
 ## Differences from consumer expectations
 
-No difference was found: every adapted case agrees with the current behaviour of kogen-coordinator.
+kogen-build's `TestCommitLandsTheReviewedTree` reads the message file after a landed commit, which this change deliberately removes: `Commit` now creates the file with mode 0600 and removes it before it returns, so the landed message is read from the commit (`git log -1 --format=%B`).
 
 ## Inventory
 
