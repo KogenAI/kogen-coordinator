@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KogenAI/kogen-coordinator/durable"
 	"github.com/KogenAI/kogen-loop/sys"
 )
 
@@ -1134,3 +1135,40 @@ func TestResolveApprovalPinsAStaleMarkersReceiptByItsDigest(t *testing.T) {
 }
 
 func errOf(_ *SourceRef, err error) error { return err }
+
+func TestPublishSourceFlushesTheReceiptAndTheArchiveWithDurableSync(t *testing.T) {
+	root := t.TempDir()
+	type flush struct{ name, content string }
+	var flushed []flush
+	durable.ObserveSyncInTests(func(f *os.File) {
+		b, _ := os.ReadFile(f.Name())
+		flushed = append(flushed, flush{f.Name(), string(b)})
+	})
+	t.Cleanup(func() { durable.ObserveSyncInTests(nil) })
+
+	published := func(contract string) string {
+		t.Helper()
+		flushed = nil
+		if err := PublishSource(root, "x", publishDoc(contract, "cmp")); err != nil {
+			t.Fatal(err)
+		}
+		return readFile(t, SourcePath(root, "x"))
+	}
+	requireFlush := func(what, name, content string) {
+		t.Helper()
+		for _, f := range flushed {
+			if f.name == name && f.content == content {
+				return
+			}
+		}
+		t.Errorf("provenance write was not flushed with durable.Sync: %s %s", what, name)
+	}
+
+	first := published("c1")
+	requireFlush("the receipt's temp file", SourcePath(root, "x")+".tmp", first)
+
+	second := published("c2")
+	archive := filepath.Join(filepath.Dir(SourcePath(root, "x")), sha256Hex([]byte(first))+".json")
+	requireFlush("the archive", archive, first)
+	requireFlush("the receipt's temp file", SourcePath(root, "x")+".tmp", second)
+}

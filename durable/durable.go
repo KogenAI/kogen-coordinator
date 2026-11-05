@@ -4,6 +4,8 @@ package durable
 
 import (
 	"os"
+	"runtime"
+	"strings"
 	"sync/atomic"
 )
 
@@ -23,8 +25,15 @@ func Sync(f *os.File) error {
 	return f.Sync()
 }
 
-// SkipSyncInTests switches syncing off for the rest of the process. Only Go test files call it.
+// SkipSyncInTests switches syncing off for the rest of the process. Only Go test files call it:
+// it reads its caller's file with runtime.Caller and, unless that file name ends in _test.go,
+// panics with "durable.SkipSyncInTests called from non-test file <file>" before switching
+// anything off, so syncing stays on. No option or setting changes this.
 func SkipSyncInTests() {
+	_, file, _, ok := runtime.Caller(1)
+	if !ok || !strings.HasSuffix(file, "_test.go") {
+		panic("durable.SkipSyncInTests called from non-test file " + file)
+	}
 	skip.Store(true)
 }
 
