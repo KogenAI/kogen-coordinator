@@ -63,9 +63,14 @@ type Steps[E, A any] interface {
 // Cycle routes the current candidate: verify it; a red candidate goes back to its implementer
 // with the feedback for its repair (landed false); a green one is reviewed and what the review
 // approves is committed (landed true). An approval whose candidate drifted before its commit
-// starts the cycle over with a fresh verification.
+// starts the cycle over with a fresh verification. The context is checked between steps: before
+// each Verify, Review and Commit a cancelled context ends the cycle with its error (unwrapped) and
+// no further step starts; a step already running is never interrupted.
 func Cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool) (feedback string, landed bool, err error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
 		evidence, green, feedback, err := s.Verify(ctx, builderPass)
 		if err != nil {
 			return "", false, err
@@ -73,8 +78,14 @@ func Cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool) (feed
 		if !green {
 			return feedback, false, nil
 		}
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
 		approval, err := s.Review(ctx, evidence)
 		if err != nil {
+			return "", false, err
+		}
+		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
 		drifted, err := s.Commit(ctx, approval, true)
@@ -93,27 +104,48 @@ func Cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool) (feed
 // finished alone, with no review and no rerun of its checks; a review-only checkpoint, and the
 // review of a reviewer that cannot continue its session, get a fresh review of their saved green
 // evidence; any other review continues. What the review approves is committed, and a resumed
-// Build must land: a red candidate after a drifted approval is an error.
+// Build must land: a red candidate after a drifted approval is an error. As in Cycle, the context
+// is checked between steps, before each Approved, Fresh, Review, Continue and Commit: a cancelled
+// context returns its error (unwrapped) and starts no further step; a step already running, a
+// commit included, is never interrupted.
 func Resume[E, A any](ctx context.Context, s Steps[E, A], stage string) error {
 	var approval A
 	var err error
 	switch {
 	case stage == StageCommitFailed:
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		if approval, err = s.Approved(ctx); err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
 			return err
 		}
 		_, err = s.Commit(ctx, approval, false)
 		return err
 	case stage == StageReviewOnly || !s.Continuable():
 		var evidence E
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		if evidence, err = s.Fresh(ctx, stage); err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
 			return err
 		}
 		approval, err = s.Review(ctx, evidence)
 	default:
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		approval, err = s.Continue(ctx)
 	}
 	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	drifted, err := s.Commit(ctx, approval, true)
