@@ -46,47 +46,58 @@ func LoadModels(root string) (*ModelLineup, error) {
 			}
 			return nil, sys.Fail("environment", "project_config_invalid", fmt.Sprintf("read %s: %v", path, err), 3)
 		}
-		node, problems := parseYAML(string(b))
-		v := &validator{}
-		var models *yamlNode
-		if len(problems) == 0 {
-			if node.kind != kindMap {
-				v.add(node.line, "the file must be a mapping")
-			} else {
-				for _, p := range node.pairs {
-					if p.key == "models" {
-						models = p.node
-					} else {
-						v.add(p.line, "unknown key "+p.key)
-					}
-				}
-				if models == nil {
-					v.add(node.line, "models is required")
-				}
-			}
-			if models != nil {
-				if models.kind == kindMap {
-					for _, p := range models.pairs {
-						if p.key == "plan" {
-							v.add(p.line, "unknown key "+p.key)
-						}
-					}
-				}
-				roles := v.models(models)
-				if models.kind == kindMap {
-					for _, p := range models.pairs {
-						if r, ok := roles[p.key]; ok {
-							lineup.Roles[p.key] = r
-							lineup.Sources[p.key] = path
-						}
-					}
-				}
-			}
-			problems = v.problems
+		roles, problems := parseModelsFile(string(b))
+		for name, r := range roles {
+			lineup.Roles[name] = r
+			lineup.Sources[name] = path
 		}
 		if len(problems) > 0 {
 			return nil, configProblems(path, problems)
 		}
 	}
 	return lineup, nil
+}
+
+// parseModelsFile validates the text of a lineup file (a root mapping whose only key is
+// models) and returns the roles it names; it returns no roles when there are problems.
+func parseModelsFile(text string) (map[string]Role, []problem) {
+	node, problems := parseYAML(text)
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	v := &validator{}
+	if node.kind != kindMap {
+		v.add(node.line, "the file must be a mapping")
+		return nil, v.problems
+	}
+	var models *yamlNode
+	for _, p := range node.pairs {
+		if p.key == "models" {
+			models = p.node
+		} else {
+			v.add(p.line, "unknown key "+p.key)
+		}
+	}
+	if models == nil {
+		v.add(node.line, "models is required")
+		return nil, v.problems
+	}
+	if models.kind == kindMap {
+		for _, p := range models.pairs {
+			if p.key == "plan" {
+				v.add(p.line, "unknown key "+p.key)
+			}
+		}
+	}
+	all := v.models(models)
+	if len(v.problems) > 0 {
+		return nil, v.problems
+	}
+	named := map[string]Role{}
+	if models.kind == kindMap {
+		for _, p := range models.pairs {
+			named[p.key] = all[p.key]
+		}
+	}
+	return named, nil
 }

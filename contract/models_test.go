@@ -88,6 +88,11 @@ func TestModelsBaselineHash(t *testing.T) {
 	if project.Hash(root, paths) != before {
 		t.Fatal("local file changed approval")
 	}
+	equal(t, "LocalChecksPath", project.LocalChecksPath, ".kogen/local/checks.yaml")
+	writeFile(t, root, project.LocalChecksPath, "checks: []\n")
+	if project.Hash(root, paths) != before {
+		t.Fatal("local checks file changed approval")
+	}
 	writeFile(t, root, project.ModelsPath, "models: {}\n")
 	if project.Hash(root, paths) == before {
 		t.Fatal("team file did not change approval")

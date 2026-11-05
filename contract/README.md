@@ -36,7 +36,8 @@ They all resolve kogen-coordinator at `c4a49a4`, whose exported production code 
 
 Each item is asserted so that changing it fails the suite.
 
-- `models-lineup`, `TestModelsLineup` and `TestModelsValidation`: the opt-in team and local paths, defaults, whole-role overrides, source paths, file immutability and role validation. Legacy configuration remains independent of these files.
+- `models-lineup`, `TestModelsLineup` and `TestModelsValidation`: the opt-in team and local paths, defaults, whole-role overrides, source paths, file immutability and role validation.
+- `config-local-overlay`, `TestConfigLocalOverlay`, `TestModelsBaselineHash`: `LoadConfig` applies `.kogen/local/models.yaml` (whole-role replacement) and `project.LocalChecksPath` (`.kogen/local/checks.yaml`, per-name `Run` replacement in the committed names and order) over `.kogen/project.yaml`; a malformed local file is `environment/project_config_invalid` (exit 3) with its absolute path and `line N:` lines and no Config; no file is written; the local files stay outside the approval baseline.
 - `config-path`, `TestConfigPathAndLoad`: `project.ConfigPath` is `.kogen/project.yaml` and `LoadConfig` reads the file written there. The removed `shape_workers`, `shape_audit`, `shape_decision_check` and `review_material` keys are ignored, and `ShapeWorkers`, `ShapeAudit`, `ShapeDecisionCheck` and `ReviewMaterial` hold the fixed values (workers off with an empty `Roles` map, audit off, decision check off, review material `parts`).
 - `config-invalid-lines`, `TestConfigInvalidNamesTheLines`: an invalid file is `environment/project_config_invalid` (exit 3) with one `line N: ...` line per problem.
 - `config-not-initialized`, `TestConfigNotInitialized`: a root without the file is `environment/not_initialized` (exit 3).

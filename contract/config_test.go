@@ -96,6 +96,44 @@ func TestConfigPathAndLoad(t *testing.T) {
 	equal(t, "review is the default", cfg.Models["review"], project.DefaultModels()["review"])
 }
 
+// config-local-overlay: kogen-build build/build.go, kogen-shaping and kogen-review load the
+// configuration with LoadConfig(root); the host-local lineup and checks reach them through it.
+func TestConfigLocalOverlay(t *testing.T) {
+	const committed = "version: 1\ncommands:\n  checks:\n    - {name: a, run: ra}\n    - {name: b, run: rb}\n" +
+		"models:\n  shape: {provider: chatgpt, model: gpt-6.1-sol, effort: low}\n"
+	const models = "models:\n  shape: {executor: claude-code, model: claude-opus-5-5, effort: high}\n"
+	const checks = "checks:\n  - {name: b, run: local-b}\n  - {name: a, run: local-a}\n"
+	root := t.TempDir()
+	writeFile(t, root, project.ConfigPath, committed)
+	plain, err := project.LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, project.LocalModelsPath, models)
+	writeFile(t, root, project.LocalChecksPath, checks)
+	cfg, err := project.LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []project.Check{{Name: "a", Run: "local-a"}, {Name: "b", Run: "local-b"}}; !reflect.DeepEqual(cfg.Checks, want) {
+		t.Fatalf("Checks = %+v, want %+v", cfg.Checks, want)
+	}
+	equal(t, "shape", cfg.Models["shape"], project.Role{Executor: "claude-code", Model: "claude-opus-5-5", Effort: "high"})
+	equal(t, "build", cfg.Models["build"], plain.Models["build"])
+	equal(t, "project file", readFile(t, filepath.Join(root, project.ConfigPath)), committed)
+	equal(t, "models file", readFile(t, filepath.Join(root, project.LocalModelsPath)), models)
+	equal(t, "checks file", readFile(t, filepath.Join(root, project.LocalChecksPath)), checks)
+
+	writeFile(t, root, project.LocalChecksPath, "checks:\n  - {name: c, run: x}\n")
+	cfg, err = project.LoadConfig(root)
+	if cfg != nil {
+		t.Fatalf("Config returned with an invalid local file: %+v", cfg)
+	}
+	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
+	equal(t, "Detail", e.Detail, filepath.Join(root, project.LocalChecksPath))
+	equalList(t, "Lines", e.Lines, []string{"line 2: check name c is not in .kogen/project.yaml"})
+}
+
 // config-invalid-lines: kogen-shaping shape/init_test.go expects the invalid-configuration
 // error to name the file and carry one line per problem.
 func TestConfigInvalidNamesTheLines(t *testing.T) {

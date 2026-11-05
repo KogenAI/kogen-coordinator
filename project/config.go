@@ -20,6 +20,9 @@ import (
 // ConfigPath is the project configuration, relative to the repository root.
 const ConfigPath = ".kogen/project.yaml"
 
+// LocalChecksPath is the optional host-local check commands, relative to the repository root.
+const LocalChecksPath = ".kogen/local/checks.yaml"
+
 // Role is one model selection. Provider "" means the role names no provider (legacy ChatGPT).
 // BaseURL is set only for the openai-compatible provider (the host's /v1 base); it is
 // omitted from JSON when empty so existing checkpoints keep their bytes.
@@ -134,8 +137,10 @@ func (c *Config) NamedCommands() []NamedCommand {
 	return out
 }
 
-// LoadConfig reads and validates the configuration of an initialized project: errors are
+// LoadConfig reads and validates the configuration of an initialized project, then applies the
+// host-local lineup (LocalModelsPath) and check commands (LocalChecksPath) over it: errors are
 // environment/not_initialized, environment/old_kogen_config and environment/project_config_invalid.
+// A local file that does not exist is skipped; none is ever written.
 func LoadConfig(root string) (*Config, error) {
 	file := filepath.Join(root, ConfigPath)
 	b, err := os.ReadFile(file)
@@ -146,8 +151,123 @@ func LoadConfig(root string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := applyLocal(root, cfg); err != nil {
+		return nil, err
+	}
 	_, _ = Protected(root, cfg)
 	return cfg, nil
+}
+
+// applyLocal overlays the host-local files on a validated committed configuration: each role of
+// the local lineup replaces the whole role, each local check replaces the command of the
+// committed check with that name. The first failing file is the only one reported.
+func applyLocal(root string, cfg *Config) error {
+	localFile := func(rel string) (string, bool, error) {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", false, nil
+			}
+			return "", false, sys.Fail("environment", "project_config_invalid", fmt.Sprintf("read %s: %v", filepath.Join(root, rel), err), 3)
+		}
+		return string(b), true, nil
+	}
+	text, found, err := localFile(LocalModelsPath)
+	if err != nil {
+		return err
+	}
+	if found {
+		roles, problems := parseModelsFile(text)
+		if len(problems) > 0 {
+			return configProblems(filepath.Join(root, LocalModelsPath), problems)
+		}
+		for name, r := range roles {
+			cfg.Models[name] = r
+		}
+	}
+	text, found, err = localFile(LocalChecksPath)
+	if err != nil {
+		return err
+	}
+	if found {
+		runs, problems := parseChecksFile(text, cfg.Checks)
+		if len(problems) > 0 {
+			return configProblems(filepath.Join(root, LocalChecksPath), problems)
+		}
+		for i, c := range cfg.Checks {
+			if run, ok := runs[c.Name]; ok {
+				cfg.Checks[i].Run = run
+			}
+		}
+	}
+	return nil
+}
+
+// parseChecksFile validates the text of a host-local check file (a root mapping whose only key
+// is checks, a list of {name, run}) against the committed checks and returns the commands by
+// name; it returns none when there are problems.
+func parseChecksFile(text string, committed []Check) (map[string]string, []problem) {
+	node, problems := parseYAML(text)
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	v := &validator{}
+	if node.kind != kindMap {
+		v.add(node.line, "the file must be a mapping")
+		return nil, v.problems
+	}
+	var list *yamlNode
+	for _, p := range node.pairs {
+		if p.key == "checks" {
+			list = p.node
+		} else {
+			v.add(p.line, "unknown key "+p.key)
+		}
+	}
+	if list == nil {
+		v.add(node.line, "checks is required")
+		return nil, v.problems
+	}
+	if list.kind != kindSeq {
+		v.add(list.line, "checks must be a list")
+		return nil, v.problems
+	}
+	runs := map[string]string{}
+	seen := map[string]bool{}
+	for _, item := range list.items {
+		if item.kind != kindMap {
+			v.add(item.line, "a check must be {name, run}")
+			continue
+		}
+		unknown := false
+		for _, p := range item.pairs {
+			if p.key != "name" && p.key != "run" {
+				v.add(p.line, "unknown key "+p.key)
+				unknown = true
+			}
+		}
+		if unknown {
+			continue
+		}
+		name, okName := stringAt(item.pairs, "name")
+		run, okRun := stringAt(item.pairs, "run")
+		switch {
+		case !okName || !okRun:
+			v.add(item.line, "a check needs a name and a run string")
+		case seen[name]:
+			v.add(item.line, "check name "+name+" is used twice")
+		case !hasCheck(committed, name):
+			seen[name] = true
+			v.add(item.line, "check name "+name+" is not in "+ConfigPath)
+		default:
+			seen[name] = true
+			runs[name] = run
+		}
+	}
+	if len(v.problems) > 0 {
+		return nil, v.problems
+	}
+	return runs, nil
 }
 
 // ParseConfig validates configuration text; file names it in errors.

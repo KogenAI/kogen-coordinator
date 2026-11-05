@@ -740,3 +740,172 @@ func TestParseConfigIgnoresOneLeadingBOM(t *testing.T) {
 		t.Errorf("middle BOM fix = %q", fix.Fix)
 	}
 }
+
+const localBase = "version: 1\ncommands:\n  setup: [s]\n  fix: [f]\n  checks:\n    - {name: format, run: fmt}\n    - {name: compile, run: build}\n    - {name: vet, run: vet}\n  acceptance: {run: acc, steps_dir: features/steps}\nprotect: [p]\nmodels:\n  shape: {provider: chatgpt, model: gpt-6.1-sol, effort: low}\n"
+
+// localRoot is a project root holding the committed configuration and the given local files.
+func localRoot(t *testing.T, models, checks string) string {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, localBase)
+	if models != "" {
+		writeFile(t, root, LocalModelsPath, models)
+	}
+	if checks != "" {
+		writeFile(t, root, LocalChecksPath, checks)
+	}
+	return root
+}
+
+func TestLocalChecksPath(t *testing.T) {
+	if LocalChecksPath != ".kogen/local/checks.yaml" {
+		t.Fatalf("LocalChecksPath = %q", LocalChecksPath)
+	}
+}
+
+func TestLoadConfigLocalLineupReplacesWholeRoles(t *testing.T) {
+	const models = "models:\n  shape: {executor: claude-code, model: claude-opus-5-5, effort: high}\n  review: {provider: anthropic, model: m, effort: max}\n"
+	root := localRoot(t, models, "")
+	want, err := ParseConfig(localBase, filepath.Join(root, ConfigPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := (Role{Executor: "claude-code", Model: "claude-opus-5-5", Effort: "high"}); cfg.Models["shape"] != w {
+		t.Errorf("shape = %+v, want %+v", cfg.Models["shape"], w)
+	}
+	if w := (Role{Provider: "anthropic", Model: "m", Effort: "max"}); cfg.Models["review"] != w {
+		t.Errorf("review = %+v, want %+v", cfg.Models["review"], w)
+	}
+	if cfg.Models["build"] != DefaultModels()["build"] {
+		t.Errorf("build = %+v, want the default", cfg.Models["build"])
+	}
+	want.Models = cfg.Models
+	_, _ = Protected(root, want)
+	if !reflect.DeepEqual(cfg, want) {
+		t.Errorf("only the models should differ: %+v vs %+v", cfg, want)
+	}
+	if got := readFile(t, filepath.Join(root, LocalModelsPath)); got != models {
+		t.Errorf("local models file changed: %q", got)
+	}
+	if got := readFile(t, filepath.Join(root, ConfigPath)); got != localBase {
+		t.Errorf("project file changed: %q", got)
+	}
+}
+
+func TestLoadConfigLocalChecksReplaceCommandsByName(t *testing.T) {
+	const checks = "checks:\n  - name: vet\n    run: 'nice vet'\n  - name: format\n    run: nice fmt\n"
+	root := localRoot(t, "", checks)
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Check{{"format", "nice fmt"}, {"compile", "build"}, {"vet", "nice vet"}}
+	if !reflect.DeepEqual(cfg.Checks, want) {
+		t.Errorf("Checks = %+v, want %+v", cfg.Checks, want)
+	}
+	if !slices.Equal(cfg.Setup, []string{"s"}) || !slices.Equal(cfg.Fix, []string{"f"}) || cfg.Acceptance.Run != "acc" || !slices.Equal(cfg.Protect, []string{"p"}) {
+		t.Errorf("setup, fix, acceptance or protect changed: %+v", cfg)
+	}
+	if cfg.Models["shape"] != (Role{Provider: "chatgpt", Model: "gpt-6.1-sol", Effort: "low"}) {
+		t.Errorf("models changed: %+v", cfg.Models)
+	}
+	if got := readFile(t, filepath.Join(root, LocalChecksPath)); got != checks {
+		t.Errorf("local checks file changed: %q", got)
+	}
+	if got := readFile(t, filepath.Join(root, ConfigPath)); got != localBase {
+		t.Errorf("project file changed: %q", got)
+	}
+	empty := localRoot(t, "", "checks: []\n")
+	cfg, err = LoadConfig(empty)
+	if err != nil || !reflect.DeepEqual(cfg.Checks, []Check{{"format", "fmt"}, {"compile", "build"}, {"vet", "vet"}}) {
+		t.Errorf("empty list: %+v, %v", cfg, err)
+	}
+}
+
+func TestLoadConfigLocalFilesCombine(t *testing.T) {
+	root := localRoot(t, "models:\n  build: {executor: claude-code, model: m, effort: high}\n", "checks:\n  - {name: compile, run: c2}\n")
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Checks[1].Run != "c2" || cfg.Models["build"].Executor != "claude-code" {
+		t.Errorf("not combined: %+v", cfg)
+	}
+}
+
+func TestLoadConfigMalformedLocalFile(t *testing.T) {
+	file := func(root, rel string) string { return filepath.Join(root, rel) }
+	tests := []struct {
+		name, models, checks, path string
+		lines                      []string
+	}{
+		{"max_rounds", "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: high\n    max_rounds: 6\n", "", LocalModelsPath,
+			[]string{"line 6: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"}},
+		{"plan role", "models:\n  plan: {model: m, effort: high}\n", "", LocalModelsPath, []string{"line 2: unknown key plan"}},
+		{"models yaml", "models:\n  build: [m\n", "", LocalModelsPath, []string{"line 2: unclosed ["}},
+		{"models root", "- a\n", "", LocalModelsPath, []string{"line 1: the file must be a mapping"}},
+		{"models required", "version: 1\n", "", LocalModelsPath, []string{"line 1: models is required", "line 1: unknown key version"}},
+		{"models first", "models: {build: {executor: nope, model: m, effort: high}}\n", "checks: [x\n", LocalModelsPath, []string{"line 1: models.build.executor must be native or claude-code"}},
+		{"checks yaml", "", "checks:\n  - name: vet\n    run: [nice\n", LocalChecksPath, []string{"line 3: unclosed ["}},
+		{"checks root", "", "- a\n", LocalChecksPath, []string{"line 1: the file must be a mapping"}},
+		{"unknown root key", "", "extra: 1\nchecks: []\n", LocalChecksPath, []string{"line 1: unknown key extra"}},
+		{"checks required", "", "# c\n\nother: 1\n", LocalChecksPath, []string{"line 3: checks is required", "line 3: unknown key other"}},
+		{"checks not a list", "", "checks:\n  vet: x\n", LocalChecksPath, []string{"line 2: checks must be a list"}},
+		{"entry not a mapping", "", "checks:\n  - vet\n", LocalChecksPath, []string{"line 2: a check must be {name, run}"}},
+		{"entry unknown key", "", "checks:\n  - name: vet\n    run: x\n    note: y\n", LocalChecksPath, []string{"line 4: unknown key note"}},
+		{"entry without run", "", "checks:\n  - name: vet\n", LocalChecksPath, []string{"line 2: a check needs a name and a run string"}},
+		{"entry run not a string", "", "checks:\n  - name: vet\n    run: true\n", LocalChecksPath, []string{"line 2: a check needs a name and a run string"}},
+		{"unknown name", "", "checks:\n  - name: lint\n    run: x\n", LocalChecksPath, []string{"line 2: check name lint is not in .kogen/project.yaml"}},
+		{"duplicate", "", "checks:\n  - name: vet\n    run: a\n  - name: vet\n    run: b\n", LocalChecksPath, []string{"line 4: check name vet is used twice"}},
+		{"sorted", "", "checks:\n  - name: vet\n    run: a\n  - name: zzz\n    run: b\n  - name: vet\n    run: c\n  - name: lint\n    run: d\n", LocalChecksPath,
+			[]string{"line 4: check name zzz is not in .kogen/project.yaml", "line 6: check name vet is used twice", "line 8: check name lint is not in .kogen/project.yaml"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := localRoot(t, tc.models, tc.checks)
+			cfg, err := LoadConfig(root)
+			se, ok := sys.AsError(err)
+			if !ok || cfg != nil || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
+				se.Detail != file(root, tc.path) || !slices.Equal(se.Lines, tc.lines) {
+				t.Fatalf("got %+v, %v; want %s %q", cfg, err, tc.path, tc.lines)
+			}
+			if got := readFile(t, filepath.Join(root, ConfigPath)); got != localBase {
+				t.Errorf("project file changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestLoadConfigCommittedErrorsComeBeforeLocalFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, "version: 1\ncommands:\n  acceptance:\n    run: true\n")
+	writeFile(t, root, LocalModelsPath, "models: {build: {model: m, effort: high, max_rounds: 6}}\n")
+	writeFile(t, root, LocalChecksPath, "checks: [x\n")
+	_, err := LoadConfig(root)
+	se, ok := sys.AsError(err)
+	if !ok || se.Detail != filepath.Join(root, ConfigPath) || !slices.Equal(se.Lines, []string{"line 4: commands.acceptance.run must be a string or null"}) {
+		t.Fatalf("got %v", err)
+	}
+	empty := t.TempDir()
+	writeFile(t, empty, LocalChecksPath, "checks: []\n")
+	if _, err := LoadConfig(empty); err == nil || !strings.Contains(err.Error(), "not_initialized") {
+		t.Errorf("not initialized: %v", err)
+	}
+}
+
+func TestLoadConfigUnreadableLocalFile(t *testing.T) {
+	root := localRoot(t, "", "")
+	if err := os.MkdirAll(filepath.Join(root, LocalChecksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(root)
+	se, ok := sys.AsError(err)
+	if !ok || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
+		!strings.HasPrefix(se.Detail, "read "+filepath.Join(root, LocalChecksPath)+": ") || len(se.Lines) != 0 {
+		t.Fatalf("got %+v", err)
+	}
+}
