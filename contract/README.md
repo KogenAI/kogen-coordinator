@@ -37,7 +37,7 @@ They all resolve kogen-coordinator at `c4a49a4`, whose exported production code 
 Each item is asserted so that changing it fails the suite.
 
 - `models-lineup`, `TestModelsLineup` and `TestModelsValidation`: the opt-in team and local paths, defaults, whole-role overrides, source paths, file immutability and role validation.
-- `config-local-overlay`, `TestConfigLocalOverlay`, `TestModelsBaselineHash`: `LoadConfig` applies `.kogen/local/models.yaml` (whole-role replacement) and `project.LocalChecksPath` (`.kogen/local/checks.yaml`, per-name `Run` replacement in the committed names and order) over `.kogen/project.yaml`; a malformed local file is `environment/project_config_invalid` (exit 3) with its absolute path and `line N:` lines and no Config; no file is written; the local files stay outside the approval baseline.
+- `config-local-overlay`, `TestConfigLocalOverlay`, `TestModelsBaselineHash`: `LoadConfig` applies `.kogen/local/models.yaml` (whole-role replacement) and `project.LocalChecksPath` (`.kogen/local/checks.yaml`, per-name `Run` replacement in the committed names and order) over `.kogen/project.yaml`; a malformed local file is `environment/project_config_invalid` (exit 3) with its absolute path and `line N:` lines and no Config; no file is written; the local files stay outside the approval baseline and the team file joins it when present.
 - `config-path`, `TestConfigPathAndLoad`: `project.ConfigPath` is `.kogen/project.yaml` and `LoadConfig` reads the file written there. The removed `shape_workers`, `shape_audit`, `shape_decision_check` and `review_material` keys are ignored, and `ShapeWorkers`, `ShapeAudit`, `ShapeDecisionCheck` and `ReviewMaterial` hold the fixed values (workers off with an empty `Roles` map, audit off, decision check off, review material `parts`).
 - `config-invalid-lines`, `TestConfigInvalidNamesTheLines`: an invalid file is `environment/project_config_invalid` (exit 3) with one `line N: ...` line per problem.
 - `config-not-initialized`, `TestConfigNotInitialized`: a root without the file is `environment/not_initialized` (exit 3).
@@ -45,7 +45,8 @@ Each item is asserted so that changing it fails the suite.
 - `external-rounds` and `executor-claude-code`, `TestExecutorRoleLineup`: `DefaultExternalRounds` is 6, `ExecutorClaudeCode` is `claude-code`, the executor of a role, zero `MaxRounds` for loaded roles, and rejection of the removed `max_rounds` setting.
 - `approval-path` and `approval-json`, `TestApprovalPathAndJSON`: the approval file's path and exact bytes, and its round trip.
 - `hash-line`, `TestHashIsTheDigestOfPathDigestLines`: the approval hash is recomputed with `crypto/sha256`.
-- `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns.
+- `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns; `.kogen/models.yaml` is listed (right after `.kogen/project.yaml`) only when the project has it or a `protect` pattern lists it.
+- `baseline-former`, `TestFormerBaseline`: `project.FormerBaseline` returns a copy with `.kogen/models.yaml` inserted after `.kogen/project.yaml` when absent, the list the former always-listed rule produced, and never modifies its input.
 - `intent-paths`, `TestIntentPaths`: the paths under `.kogen/intents/<slug>`.
 - `build-edits`, `TestBuildEditsLeaveOutTheApprovedIntent`: `project.OwnedByIntent` (under `.kogen/intents/<slug>/` or `.kogen/models/<slug>/`, byte-exact prefix) and `project.BuildEdits`, a Build's edit list: the tree diff in order without the approved Intent's own paths.
 - `model-line` and `model-none`, `TestParseModelSpec`: the Model line.
@@ -203,6 +204,7 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.EncodeJSON` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/context_test.go`, `kogen-build/build/unit_test.go` | `TestEncodeJSON`, `TestWritePackageFacts` |
 | `project.ExecutorClaudeCode` | kogen | `kogen/cli/executor_wiring_test.go` | `TestExecutorRoleLineup` |
 | `project.FeaturePath` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen-build/build/helper_test.go`, `kogen-build/build/builder.go` | `TestIntentPaths`, `TestIntentFields`, `TestCheckIntent` |
+| `project.FormerBaseline` | kogen-build, kogen-verification | paired consumer rows b-consumes-baseline-optional-models and v-consumes-baseline-optional-models | `TestFormerBaseline` |
 | `project.Hash` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen/cli/buildprogram/helper_test.go`, `kogen-verification/verify/readiness_test.go`, `kogen-shaping/shape/approve_test.go` | `TestHashIsTheDigestOfPathDigestLines`, `TestApprovalOfTheBaselineHash`, `TestWritePackageFacts`, `TestCaptureSourcePublishesTheVersionOneReceipt` |
 | `project.Intent` | kogen-verification, kogen-shaping, kogen-build | `kogen-verification/contract/contract_test.go`, `kogen-shaping/shape/approve_test.go`, `kogen-build/build/material_test.go` | `TestIntentFields` |
 | `project.Intent.Acceptance` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/window.go` | `TestIntentFields` |

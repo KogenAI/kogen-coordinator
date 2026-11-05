@@ -590,7 +590,7 @@ func TestBaselineOrderAndDuplicates(t *testing.T) {
 	want := []string{
 		IntentMDPath(slug), FeaturePath(slug), "features/steps/z.js", "features/steps/a.js", ModelPath(slug),
 		IntentDir(slug) + "/.hidden", IntentDir(slug) + "/notes/b.txt",
-		ConfigPath, ModelsPath, "lint.cfg",
+		ConfigPath, "lint.cfg",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("baseline\n got %q\nwant %q", got, want)
@@ -600,8 +600,52 @@ func TestBaselineOrderAndDuplicates(t *testing.T) {
 func TestBaselineWithoutIntentFiles(t *testing.T) {
 	root := gitRepo(t)
 	got, err := Baseline(root, "nothing", &Config{})
-	if err != nil || !slices.Equal(got, []string{ConfigPath, ModelsPath}) {
+	if err != nil || !slices.Equal(got, []string{ConfigPath}) {
 		t.Errorf("got %v %v", got, err)
+	}
+}
+
+func TestBaselineListsTeamModelsOnlyWhenPresent(t *testing.T) {
+	for _, protect := range [][]string{nil, {".kogen/*.yaml"}} {
+		root := gitRepo(t)
+		slug := "demo"
+		writeFile(t, root, IntentMDPath(slug), "# x\n")
+		writeFile(t, root, ConfigPath, Template())
+		cfg := &Config{Protect: protect}
+		got, err := Baseline(root, slug, cfg)
+		want := []string{IntentMDPath(slug), ConfigPath}
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("protect %v without team file: got %v %v, want %v", protect, got, err, want)
+		}
+		writeFile(t, root, LocalModelsPath, "models: {}\n")
+		if got, err = Baseline(root, slug, cfg); err != nil || slices.Contains(got, ModelsPath) || slices.Contains(got, LocalModelsPath) {
+			t.Errorf("protect %v local file only: got %v %v", protect, got, err)
+		}
+		writeFile(t, root, ModelsPath, "models: {}\n")
+		got, err = Baseline(root, slug, cfg)
+		want = []string{IntentMDPath(slug), ConfigPath, ModelsPath}
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("protect %v with team file: got %v %v, want %v", protect, got, err, want)
+		}
+	}
+}
+
+func TestFormerBaseline(t *testing.T) {
+	in := []string{"a", ConfigPath, "b"}
+	got := FormerBaseline(in)
+	if want := []string{"a", ConfigPath, ModelsPath, "b"}; !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if !slices.Equal(in, []string{"a", ConfigPath, "b"}) {
+		t.Errorf("input modified: %v", in)
+	}
+	has := []string{ConfigPath, "x", ModelsPath}
+	if got := FormerBaseline(has); !slices.Equal(got, has) || &got[0] == &has[0] {
+		t.Errorf("list with the team path: got %v", got)
+	}
+	none := []string{"a"}
+	if got := FormerBaseline(none); !slices.Equal(got, none) {
+		t.Errorf("list without the configuration: got %v", got)
 	}
 }
 
@@ -639,7 +683,7 @@ func TestBaselineSkipsDanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := Baseline(root, slug, &Config{})
-	want := []string{IntentMDPath(slug), ConfigPath, ModelsPath}
+	want := []string{IntentMDPath(slug), ConfigPath}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("got %v %v, want %v", got, err, want)
 	}

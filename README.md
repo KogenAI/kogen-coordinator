@@ -37,10 +37,16 @@ The former `shape_workers`, `shape_audit`, `shape_decision_check` and `review_ma
 ignored; `Config` holds their fixed defaults (workers off, audit off, decision check off, review
 material `parts`).
 
-The approval baseline includes the team path immediately after the project configuration, even
-when the team file is absent. The local path is not automatically protected; explicit `protect`
-patterns continue to apply. Thus local-only changes do not affect the ordinary approval hash,
-while adding or changing the team file does.
+The approval baseline includes the team path immediately after the project configuration only
+when the project has the team file (or a `protect` pattern lists it); a project without it gets
+the baseline it had before the lineup existed. The local path is never added by this rule and is
+not automatically protected; explicit `protect` patterns continue to apply. Thus local-only
+changes do not affect the ordinary approval hash, while adding or changing the team file does.
+`project.FormerBaseline(paths)` returns a copy of a baseline with the team path inserted after
+the project configuration when it is missing: the list the former always-listed rule produced.
+A consumer that finds a saved list equal to `FormerBaseline(current)`, or an approval hash equal
+to `Hash(root, FormerBaseline(current))`, knows it was saved under the former rule while the team
+file was absent and nothing else changed.
 
 ## Host-local lineups and checks
 

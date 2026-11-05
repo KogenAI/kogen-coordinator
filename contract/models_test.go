@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestModelsValidation(t *testing.T) {
 func TestModelsBaselineHash(t *testing.T) {
 	root := t.TempDir()
 	paths, err := project.Baseline(root, "missing", &project.Config{})
-	if err != nil || !reflect.DeepEqual(paths, []string{project.ConfigPath, project.ModelsPath}) {
+	if err != nil || !reflect.DeepEqual(paths, []string{project.ConfigPath}) {
 		t.Fatalf("baseline: %v %v", paths, err)
 	}
 	before := project.Hash(root, paths)
@@ -94,7 +95,27 @@ func TestModelsBaselineHash(t *testing.T) {
 		t.Fatal("local checks file changed approval")
 	}
 	writeFile(t, root, project.ModelsPath, "models: {}\n")
+	paths, err = project.Baseline(root, "missing", &project.Config{})
+	if err != nil || !reflect.DeepEqual(paths, []string{project.ConfigPath, project.ModelsPath}) {
+		t.Fatalf("baseline with the team file: %v %v", paths, err)
+	}
 	if project.Hash(root, paths) == before {
 		t.Fatal("team file did not change approval")
 	}
+}
+
+// FormerBaseline is the list the former always-listed rule produced: a consumer recognizes a
+// checkpoint or approval saved under it while the team file was absent.
+func TestFormerBaseline(t *testing.T) {
+	root := t.TempDir()
+	current := must(project.Baseline(root, "missing", &project.Config{}))
+	input := slices.Clone(current)
+	former := project.FormerBaseline(current)
+	equalList(t, "former", former, []string{project.ConfigPath, project.ModelsPath})
+	equalList(t, "input", current, input)
+	if project.Hash(root, former) == project.Hash(root, current) {
+		t.Fatal("the former list hashes like the current one")
+	}
+	equalList(t, "with the team file", project.FormerBaseline(former), former)
+	equalList(t, "without the configuration", project.FormerBaseline([]string{"a"}), []string{"a"})
 }
