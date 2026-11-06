@@ -19,7 +19,8 @@ type ModelLineup struct {
 	Sources map[string]string
 }
 
-// ModelsTemplate returns the team lineup with the default roles.
+// ModelsTemplate returns the team lineup file `.kogen/models.yaml`, the one place besides the
+// host-local file where model roles are written, with the default roles.
 func ModelsTemplate() string {
 	var b strings.Builder
 	b.WriteString("models:\n")

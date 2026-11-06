@@ -1,5 +1,6 @@
 // Package project reads and writes what Kogen keeps about a project: `.kogen/project.yaml`
-// (commands, protected paths, models), Gherkin features, Intent packages with their baseline
+// (commands, protected paths), the model lineup files `.kogen/models.yaml` and
+// `.kogen/local/models.yaml`, Gherkin features, Intent packages with their baseline
 // hash and approvals, and the command detection `kogen init` starts from. It holds data and
 // files only; the one Git it runs is `git check-ignore` and `git ls-files`.
 package project
@@ -80,14 +81,15 @@ type DecisionCheck struct{ Enabled bool }
 // Config.ReviewMaterial always holds ReviewMaterial{Mode: "parts"}.
 type ReviewMaterial struct{ Mode string }
 
-// Config is a validated `.kogen/project.yaml` (SET-8).
+// Config is a validated `.kogen/project.yaml` (SET-8). Its Models come from the models files
+// (ModelsPath, LocalModelsPath), never from `.kogen/project.yaml`.
 type Config struct {
 	Setup, Fix         []string
 	Checks             []Check
 	Acceptance         *Acceptance // nil when neither run nor steps_dir is set
 	Protect            []string
 	ProtectDiagnostics []ProtectDiagnostic
-	Models             map[string]Role // "shape", "build", "review"; defaults where the file says nothing
+	Models             map[string]Role // "shape", "build", "review"; set by LoadConfig from the models files, defaults where they say nothing
 	ShapeWorkers       Workers
 	ShapeAudit         Audit
 	ShapeDecisionCheck DecisionCheck
@@ -137,10 +139,13 @@ func (c *Config) NamedCommands() []NamedCommand {
 	return out
 }
 
-// LoadConfig reads and validates the configuration of an initialized project, then applies the
-// host-local lineup (LocalModelsPath) and check commands (LocalChecksPath) over it: errors are
-// environment/not_initialized, environment/old_kogen_config and environment/project_config_invalid.
-// A local file that does not exist is skipped; none is ever written.
+// LoadConfig reads and validates the configuration of an initialized project, then takes every
+// model role from the models files: the defaults, then the team file ModelsPath, then the
+// host-local LocalModelsPath, each role a file names replacing the whole role. It then applies
+// the host-local check commands (LocalChecksPath). Files are read in that precedence order and the
+// first failure is the only one reported: errors are environment/not_initialized,
+// environment/old_kogen_config and environment/project_config_invalid. A models file or local
+// checks file that does not exist is skipped; none is ever written.
 func LoadConfig(root string) (*Config, error) {
 	file := filepath.Join(root, ConfigPath)
 	b, err := os.ReadFile(file)
@@ -151,17 +156,18 @@ func LoadConfig(root string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := applyLocal(root, cfg); err != nil {
+	if err := applyFiles(root, cfg); err != nil {
 		return nil, err
 	}
 	_, _ = Protected(root, cfg)
 	return cfg, nil
 }
 
-// applyLocal overlays the host-local files on a validated committed configuration: each role of
-// the local lineup replaces the whole role, each local check replaces the command of the
-// committed check with that name. The first failing file is the only one reported.
-func applyLocal(root string, cfg *Config) error {
+// applyFiles applies the models files and the host-local checks over a validated committed
+// configuration: each role of a models file replaces the whole role, each local check replaces
+// the command of the committed check with that name. The first failing file is the only one
+// reported.
+func applyFiles(root string, cfg *Config) error {
 	localFile := func(rel string) (string, bool, error) {
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
@@ -172,20 +178,23 @@ func applyLocal(root string, cfg *Config) error {
 		}
 		return string(b), true, nil
 	}
-	text, found, err := localFile(LocalModelsPath)
-	if err != nil {
-		return err
-	}
-	if found {
+	for _, rel := range []string{ModelsPath, LocalModelsPath} {
+		text, found, err := localFile(rel)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
 		roles, problems := parseModelsFile(text)
 		if len(problems) > 0 {
-			return configProblems(filepath.Join(root, LocalModelsPath), problems)
+			return configProblems(filepath.Join(root, rel), problems)
 		}
 		for name, r := range roles {
 			cfg.Models[name] = r
 		}
 	}
-	text, found, err = localFile(LocalChecksPath)
+	text, found, err := localFile(LocalChecksPath)
 	if err != nil {
 		return err
 	}
@@ -339,7 +348,8 @@ func validateConfig(node *yamlNode) (*Config, []problem) {
 			// Older project files may retain these removed options. They are ignored: the
 			// configuration always holds their fixed defaults.
 		case "models":
-			c.Models = v.models(p.node)
+			// The lineup lives only in the models files; its contents are not read.
+			v.add(p.line, "models is no longer read from "+ConfigPath+"; move the model lineup to "+ModelsPath)
 		default:
 			v.add(p.line, "unknown key "+p.key)
 		}
@@ -681,8 +691,8 @@ func stringAt(pairs []yamlPair, key string) (string, bool) {
 func isString(n *yamlNode) bool { return n.quoted || !notStringRe.MatchString(n.text) }
 
 // ReadableConfig is what validation could read from configuration text that may be invalid:
-// every key it accepted, with the defaults (SET-8) for everything else, including a file it
-// cannot parse at all.
+// every key it accepted, with the defaults (SET-8) for everything else, including the models
+// (a models key is refused, not applied) and a file it cannot parse at all.
 func ReadableConfig(text string) *Config {
 	if node, probs := parseYAML(text); probs == nil && node.kind == kindMap {
 		if cfg, _ := validateConfig(node); cfg != nil {

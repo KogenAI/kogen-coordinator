@@ -1,20 +1,11 @@
 package project
 
-import (
-	"strings"
-)
+import "strings"
 
 // Template is the configuration `kogen init` writes before it keeps any detected command (SET-8):
-// every list empty, acceptance null, the default model per role.
-func Template() string {
-	var b strings.Builder
-	b.WriteString(templateHead)
-	d := DefaultModels()
-	for _, role := range ModelRoles {
-		b.WriteString("  " + role + ":\n    model: " + d[role].Model + "\n    effort: " + d[role].Effort + "\n")
-	}
-	return b.String()
-}
+// every list empty, acceptance null. It has no models block: the lineup lives in the models files
+// (see ModelsTemplate).
+func Template() string { return templateHead }
 
 const templateHead = `version: 1
 commands:
@@ -25,7 +16,6 @@ commands:
     run: null        # the acceptance command (VER-3)
     steps_dir: null  # where shaping writes step-definition files
 protect: []          # check configuration the Build must not change, e.g. .credo.exs
-models:
 `
 
 // templateLine is the template's own line for key: the empty value with its comment.
@@ -39,7 +29,7 @@ func templateLine(key string) string {
 }
 
 // RenderConfig is the template with the commands `init` kept (SET-2): the setup, fix, checks,
-// protect and acceptance fields of c are written; models keep their defaults.
+// protect and acceptance fields of c are written; it writes no models block, whatever c.Models holds.
 func RenderConfig(c *Config) string {
 	lines := []string{"version: 1", "commands:"}
 	list := func(key string, items []string) {
@@ -77,9 +67,7 @@ func RenderConfig(c *Config) string {
 	} else {
 		lines = append(lines, "protect:\n"+strings.Join(prefixed("  - ", quoted(c.Protect)), "\n"))
 	}
-	lines = append(lines, "models:")
-	_, models, _ := strings.Cut(Template(), "models:\n")
-	return strings.Join(lines, "\n") + "\n" + models
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func prefixed(prefix string, ss []string) []string {

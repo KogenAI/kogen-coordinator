@@ -28,6 +28,15 @@ func provenanceFixture(t *testing.T, g *factsGolden) string {
 		t.Setenv(k, v)
 	}
 	for p, c := range g.Repo.Files {
+		if p == ConfigPath {
+			// The recorded project file still carries the removed models block: its lineup lives
+			// in the team file now.
+			var models string
+			c, models = splitModelsBlock(c)
+			if models != "" {
+				writeFile(t, root, ModelsPath, models)
+			}
+		}
 		writeFile(t, root, p, c)
 	}
 	git(t, root, "add", "-A")
@@ -36,6 +45,48 @@ func provenanceFixture(t *testing.T, g *factsGolden) string {
 		writeFile(t, root, p, c)
 	}
 	return root
+}
+
+// splitModelsBlock separates the root models: block of a project configuration text from the rest
+// and returns the block as a models file; models is empty when the text has no such block.
+func splitModelsBlock(text string) (rest, models string) {
+	var kept, block []string
+	in := false
+	for _, l := range strings.SplitAfter(text, "\n") {
+		switch {
+		case strings.HasPrefix(l, "models:"):
+			in = true
+		case in && l != "" && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") && !strings.HasPrefix(l, "\n"):
+			in = false
+		}
+		if in {
+			block = append(block, l)
+		} else {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, ""), strings.Join(block, "")
+}
+
+// legacyConfig is the configuration Elixir Kogen held for text that still carries a root models:
+// block (the recorded digests are of that struct): the text without the block, and the roles the
+// block names over the defaults.
+func legacyConfig(t *testing.T, text string) *Config {
+	t.Helper()
+	rest, models := splitModelsBlock(text)
+	cfg := mustParse(t, rest)
+	if models != "" {
+		node, probs := parseYAML(models)
+		if probs != nil {
+			t.Fatalf("%q: %v", models, probs)
+		}
+		v := &validator{}
+		cfg.Models = v.models(node.pairs[0].node)
+		if len(v.problems) > 0 {
+			t.Fatalf("%q: %v", models, v.problems)
+		}
+	}
+	return cfg
 }
 
 func shapeSource(g *factsGolden) ShapeSource {
@@ -261,7 +312,7 @@ func TestConfigDigestMatchesElixirTermToBinary(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for i, c := range g.ConfigDigests {
-		cfg := mustParse(t, c.Text)
+		cfg := legacyConfig(t, c.Text)
 		digest := c.Digest
 		if got := configDigest(cfg); got != c.Digest {
 			if u.record(got, "config_digests", i, "digest") {
@@ -306,6 +357,15 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 	}
 	if origin.Head != g.Repo.Head && u.record(origin.Head, "repo", "head") {
 		g.Repo.Head = origin.Head
+	}
+	for _, f := range []struct {
+		key      string
+		got      string
+		recorded *string
+	}{{"head", origin.Head, &g.Repo.State.Origin.Head}, {"tree", origin.Tree, &g.Repo.State.Origin.Tree}} {
+		if f.got != *f.recorded && u.record(f.got, "repo", "state", "origin", f.key) {
+			*f.recorded = f.got
+		}
 	}
 	if origin != g.Repo.State.Origin || origin.Head != g.Repo.Head {
 		t.Fatalf("origin %+v, Elixir %+v", origin, g.Repo.State.Origin)

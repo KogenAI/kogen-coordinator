@@ -590,7 +590,7 @@ func TestGoldenIsCurrent(t *testing.T) {
 			t.Errorf("golden %s has only %d cases", name, n)
 		}
 	}
-	if !strings.Contains(g.Render[0].Text, "models:\n  shape:") {
-		t.Error("golden render does not look like a template")
+	if !strings.HasPrefix(g.Render[0].Text, "version: 1\ncommands:\n") || !strings.HasSuffix(g.Render[0].Text, "\nprotect: []          # check configuration the Build must not change, e.g. .credo.exs\n") {
+		t.Error("golden render does not look like the template")
 	}
 }

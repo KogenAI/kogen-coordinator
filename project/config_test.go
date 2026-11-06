@@ -33,6 +33,35 @@ func configError(t *testing.T, text, file string) *sys.Error {
 	return se
 }
 
+// loadModelsText loads a project whose `.kogen/models.yaml` holds models: roles are validated by
+// LoadConfig exactly as the models file schema decides.
+func loadModelsText(t *testing.T, models string) (*Config, error) {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, "version: 1\n")
+	writeFile(t, root, ModelsPath, models)
+	return LoadConfig(root)
+}
+
+func modelsConfig(t *testing.T, models string) *Config {
+	t.Helper()
+	cfg, err := loadModelsText(t, models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func modelsError(t *testing.T, models string) *sys.Error {
+	t.Helper()
+	_, err := loadModelsText(t, models)
+	se, ok := sys.AsError(err)
+	if !ok {
+		t.Fatalf("got %v, want a *sys.Error", err)
+	}
+	return se
+}
+
 func TestRenderConfigBlockCollectionsAndLongValues(t *testing.T) {
 	// ExUnit: SET-8: generated settings use block collections and preserve long command values
 	input := &Config{
@@ -52,28 +81,28 @@ func TestRenderConfigBlockCollectionsAndLongValues(t *testing.T) {
 	for _, want := range []string{
 		"  checks:\n    - name: format\n      run:",
 		"protect:\n  - '.formatter.exs'\n",
-		"models:\n  shape:\n    model: gpt-6.1-sol\n    effort: high\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rendered text lacks %q:\n%s", want, text)
 		}
 	}
-	long := "gpt-6.1-sol-with-a-long-explicit-model-identifier-for-formatting-regression"
-	cfg := mustParse(t, strings.ReplaceAll(text, "gpt-6.1-sol", long))
+	if strings.Contains(text, "models:") || !strings.HasSuffix(text, "  - 'config/checks/very-long-path-to-project-formatting-configuration.yaml'\n") {
+		t.Errorf("rendered text has a models block or does not end with the protect lines:\n%s", text)
+	}
+	cfg := mustParse(t, text)
 	if !slices.Equal(cfg.Setup, input.Setup) || !slices.Equal(cfg.Fix, input.Fix) || !slices.Equal(cfg.Checks, input.Checks) || !slices.Equal(cfg.Protect, input.Protect) {
 		t.Errorf("round trip lost commands: %+v", cfg)
 	}
 	if *cfg.Acceptance != *input.Acceptance {
 		t.Errorf("acceptance %+v", cfg.Acceptance)
 	}
-	if cfg.Models["shape"] != (Role{Model: long, Effort: "high"}) {
-		t.Errorf("shape = %+v", cfg.Models["shape"])
+	if !maps.Equal(cfg.Models, DefaultModels()) {
+		t.Errorf("models = %+v, want the defaults", cfg.Models)
 	}
-	if cfg.Models["review"] != (Role{Model: "gpt-6.1-terra", Effort: "medium"}) {
-		t.Errorf("review = %+v", cfg.Models["review"])
-	}
-	if cfg.Models["build"] != (Role{Model: long, Effort: "medium"}) {
-		t.Errorf("build = %+v", cfg.Models["build"])
+	// Whatever c.Models holds, no models block is written.
+	input.Models = map[string]Role{"build": {Executor: ExecutorClaudeCode, Model: "m", Effort: "high"}}
+	if got := RenderConfig(input); got != text {
+		t.Errorf("rendering with Models differs:\n%s\n---\n%s", got, text)
 	}
 }
 
@@ -98,19 +127,12 @@ commands:
     run: null        # the acceptance command (VER-3)
     steps_dir: null  # where shaping writes step-definition files
 protect: []          # check configuration the Build must not change, e.g. .credo.exs
-models:
-  shape:
-    model: gpt-6.1-sol
-    effort: high
-  build:
-    model: gpt-6.1-sol
-    effort: medium
-  review:
-    model: gpt-6.1-terra
-    effort: medium
 `
 	if Template() != want {
 		t.Errorf("template:\n%s", Template())
+	}
+	if strings.Contains(Template(), "models:") {
+		t.Error("the template has a models block")
 	}
 	wantDefaults := map[string]Role{
 		"shape":  {Model: "gpt-6.1-sol", Effort: "high"},
@@ -146,7 +168,7 @@ func TestRenderConfigQuoting(t *testing.T) {
 }
 
 func TestParseConfigInterpretsCommands(t *testing.T) {
-	// ExUnit: SET-8: commands, checks, acceptance, protect, and model defaults are interpreted
+	// ExUnit: SET-8: commands, checks, acceptance, protect and model defaults are interpreted
 	cfg := mustParse(t, `version: 1
 commands:
   setup: [mix deps.get, npm ci]
@@ -154,8 +176,6 @@ commands:
   checks: [{name: test, run: mix test}, {name: lint, run: mix credo}]
   acceptance: {run: "npx cucumber --format message:$KOGEN_ACCEPTANCE_REPORT", steps_dir: features/steps/}
 protect: [".credo.exs", "config/**/*.yaml"]
-models:
-  build: {model: gpt-6-luna, effort: high}
 `)
 	if !slices.Equal(cfg.Setup, []string{"mix deps.get", "npm ci"}) || !slices.Equal(cfg.Fix, []string{"mix format"}) {
 		t.Errorf("setup/fix %v %v", cfg.Setup, cfg.Fix)
@@ -169,12 +189,7 @@ models:
 	if !slices.Equal(cfg.Protect, []string{".credo.exs", "config/**/*.yaml"}) {
 		t.Errorf("protect %v", cfg.Protect)
 	}
-	wantModels := map[string]Role{
-		"shape":  {Model: "gpt-6.1-sol", Effort: "high"},
-		"build":  {Model: "gpt-6-luna", Effort: "high"},
-		"review": {Model: "gpt-6.1-terra", Effort: "medium"},
-	}
-	if !maps.Equal(cfg.Models, wantModels) {
+	if !maps.Equal(cfg.Models, DefaultModels()) {
 		t.Errorf("models %v", cfg.Models)
 	}
 	wantNamed := []NamedCommand{
@@ -190,17 +205,58 @@ models:
 	}
 }
 
-func TestParseConfigIgnoresPlanRole(t *testing.T) {
-	// ExUnit: SET-8: obsolete planner settings do not add a planner role
-	cfg := mustParse(t, Template()+"  plan: {model: old-planner, effort: high}\n")
-	if _, ok := cfg.Models["plan"]; ok {
-		t.Error("a plan role was added")
+func TestModelsFileRejectsPlanRole(t *testing.T) {
+	// The planner role is not a role of the models file.
+	se := modelsError(t, ModelsTemplate()+"  plan: {model: old-planner, effort: high}\n")
+	if !slices.Equal(se.Lines, []string{"line 11: unknown key plan"}) {
+		t.Errorf("lines %q", se.Lines)
 	}
-	if cfg.Models["build"] != (Role{Model: "gpt-6.1-sol", Effort: "medium"}) {
-		t.Errorf("build %+v", cfg.Models["build"])
+}
+
+func TestParseConfigRefusesModelsKey(t *testing.T) {
+	const want = "line 6: models is no longer read from .kogen/project.yaml; move the model lineup to .kogen/models.yaml"
+	text := "version: 1\ncommands:\n  checks:\n    - name: test\n      run: 'go test ./...'\nmodels:\n  build: {executor: claude-code, model: m, effort: high}\n"
+	check := func(label string, err error, file string, lines ...string) {
+		t.Helper()
+		se, ok := sys.AsError(err)
+		if !ok || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
+			se.Detail != file || !slices.Equal(se.Lines, lines) {
+			t.Errorf("%s: got %+v", label, err)
+		}
 	}
-	// The ignored role is not even validated.
-	mustParse(t, "version: 1\nmodels:\n  plan: garbage\n")
+	_, err := ParseConfig(text, "/p/.kogen/project.yaml")
+	check("ParseConfig", err, "/p/.kogen/project.yaml", want)
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, text)
+	_, err = LoadConfig(root)
+	check("LoadConfig", err, filepath.Join(root, ConfigPath), want)
+	// The contents under the key are not validated, and other problems are reported alongside it
+	// in line order.
+	for label, models := range map[string]string{"scalar": "models: x\n", "garbage": "models:\n  plan: garbage\n  other: 1\n  build: {model: 1}\n"} {
+		_, err = ParseConfig("version: 1\nprotect: x\n"+models+"zzz: 1\n", "f")
+		se, _ := sys.AsError(err)
+		last := "line 4: unknown key zzz"
+		if label == "garbage" {
+			last = "line 7: unknown key zzz"
+		}
+		if se == nil || !slices.Equal(se.Lines, []string{"line 2: protect must be a list", "line 3: models is no longer read from .kogen/project.yaml; move the model lineup to .kogen/models.yaml", last}) {
+			t.Errorf("%s: %+v", label, err)
+		}
+	}
+	// A project file without the key still parses, with the default roles.
+	if cfg := mustParse(t, "version: 1\n"); !maps.Equal(cfg.Models, DefaultModels()) {
+		t.Errorf("models %+v", cfg.Models)
+	}
+}
+
+func TestReadableConfigDoesNotApplyModelsKey(t *testing.T) {
+	cfg := ReadableConfig("version: 1\ncommands:\n  checks:\n    - name: unit\n      run: u\nprotect:\n  - keep\nmodels:\n  build: {model: x, effort: low}\n")
+	if !slices.Equal(cfg.Checks, []Check{{"unit", "u"}}) || !slices.Equal(cfg.Protect, []string{"keep"}) {
+		t.Errorf("readable remainder lost: %+v", cfg)
+	}
+	if !maps.Equal(cfg.Models, DefaultModels()) {
+		t.Errorf("models %+v, want the defaults", cfg.Models)
+	}
 }
 
 func TestParseConfigPlainScalarKeepsComma(t *testing.T) {
@@ -280,17 +336,32 @@ func TestParseConfigMoreRules(t *testing.T) {
 		{"acceptance unknown key", "version: 1\ncommands:\n  acceptance: {run: x, extra: 1}\n", []string{"line 3: unknown key extra"}},
 		{"check not a map", "version: 1\ncommands:\n  checks:\n    - just text\n", []string{"line 4: a check must be {name, run}"}},
 		{"check unknown keys only", "version: 1\ncommands:\n  checks:\n    - name: a\n      extra: 1\n      other: 2\n", []string{"line 5: unknown key extra", "line 6: unknown key other"}},
-		{"models scalar", "version: 1\nmodels: x\n", []string{"line 2: models must be a mapping"}},
-		{"models unknown role", "version: 1\nmodels:\n  other: {model: m, effort: e}\n", []string{"line 3: unknown key other"}},
-		{"models missing effort", "version: 1\nmodels:\n  build: {model: m}\n", []string{"line 3: models.build must be {model, effort}"}},
-		{"models extra key", "version: 1\nmodels:\n  build: {model: m, effort: e, extra: 1}\n", []string{"line 3: models.build must be {model, effort}"}},
-		{"models number model", "version: 1\nmodels:\n  build: {model: 1, effort: high}\n", []string{"line 3: models.build must be {model, effort}"}},
 		{"problems sorted by line then text", "version: 1\nprotect: x\ncommands:\n  setup: y\nzzz: 1\naaa: 2\n", []string{"line 2: protect must be a list", "line 4: commands.setup must be a list", "line 5: unknown key zzz", "line 6: unknown key aaa"}},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
 			se := configError(t, c.text, "f")
 			if !slices.Equal(se.Lines, c.lines) {
+				t.Errorf("lines %q, want %q", se.Lines, c.lines)
+			}
+		})
+	}
+}
+
+func TestModelsFileRules(t *testing.T) {
+	cases := []struct {
+		label, text string
+		lines       []string
+	}{
+		{"models scalar", "models: x\n", []string{"line 1: models must be a mapping"}},
+		{"models unknown role", "models:\n  other: {model: m, effort: e}\n", []string{"line 2: unknown key other"}},
+		{"models missing effort", "models:\n  build: {model: m}\n", []string{"line 2: models.build must be {model, effort}"}},
+		{"models extra key", "models:\n  build: {model: m, effort: e, extra: 1}\n", []string{"line 2: models.build must be {model, effort}"}},
+		{"models number model", "models:\n  build: {model: 1, effort: high}\n", []string{"line 2: models.build must be {model, effort}"}},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			if se := modelsError(t, c.text); !slices.Equal(se.Lines, c.lines) {
 				t.Errorf("lines %q, want %q", se.Lines, c.lines)
 			}
 		})
@@ -381,10 +452,11 @@ func TestLoadConfigReadsTheTemplate(t *testing.T) {
 	}
 }
 
-func TestLoadConfigExplicitReviewWinsAndFileIsUnchanged(t *testing.T) {
+func TestLoadConfigTeamFileDecidesItsRoles(t *testing.T) {
 	root := t.TempDir()
-	const text = "version: 1\nmodels:\n  review: {provider: chatgpt, model: gpt-6.1-sol, effort: high}\n"
-	writeFile(t, root, ConfigPath, text)
+	const text = "models:\n  review: {provider: chatgpt, model: gpt-6.1-sol, effort: high}\n"
+	writeFile(t, root, ConfigPath, "version: 1\n")
+	writeFile(t, root, ModelsPath, text)
 	cfg, err := LoadConfig(root)
 	if err != nil {
 		t.Fatal(err)
@@ -395,9 +467,65 @@ func TestLoadConfigExplicitReviewWinsAndFileIsUnchanged(t *testing.T) {
 	if cfg.Models["shape"] != DefaultModels()["shape"] || cfg.Models["build"] != DefaultModels()["build"] {
 		t.Errorf("other roles changed: %+v", cfg.Models)
 	}
-	got, err := os.ReadFile(filepath.Join(root, ConfigPath))
-	if err != nil || string(got) != text {
-		t.Errorf("configuration file changed: %q, %v", got, err)
+	if got := readFile(t, filepath.Join(root, ModelsPath)); got != text {
+		t.Errorf("team file changed: %q", got)
+	}
+	// An all-defaults team file leaves the roles at the defaults.
+	writeFile(t, root, ModelsPath, ModelsTemplate())
+	if cfg, err = LoadConfig(root); err != nil || !maps.Equal(cfg.Models, DefaultModels()) {
+		t.Errorf("template team file: %+v, %v", cfg, err)
+	}
+}
+
+func TestLoadConfigLocalFileOverTeamFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, "version: 1\n")
+	writeFile(t, root, ModelsPath, "models:\n  shape: {executor: claude-code, model: claude-sonnet-5-5, effort: high}\n  build: {executor: claude-code, model: claude-sonnet-5-5, effort: high}\n  review: {executor: claude-code, model: claude-sonnet-5-5, effort: high}\n")
+	writeFile(t, root, LocalModelsPath, "models:\n  build: {provider: anthropic, model: claude-opus-5-5, effort: max}\n")
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	team := Role{Executor: "claude-code", Model: "claude-sonnet-5-5", Effort: "high"}
+	want := map[string]Role{"shape": team, "build": {Provider: "anthropic", Model: "claude-opus-5-5", Effort: "max"}, "review": team}
+	if !maps.Equal(cfg.Models, want) {
+		t.Errorf("models %+v, want %+v", cfg.Models, want)
+	}
+}
+
+func TestLoadConfigMalformedTeamFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, "version: 1\n")
+	writeFile(t, root, ModelsPath, "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: high\n    max_rounds: 3\n")
+	// The local files come after the team file: their problems are not reported first.
+	writeFile(t, root, LocalModelsPath, "models: [x\n")
+	writeFile(t, root, LocalChecksPath, "checks: [x\n")
+	cfg, err := LoadConfig(root)
+	se, ok := sys.AsError(err)
+	if !ok || cfg != nil || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
+		se.Detail != filepath.Join(root, ModelsPath) ||
+		!slices.Equal(se.Lines, []string{"line 6: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"}) {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+	// The project file's errors come before the team file's.
+	writeFile(t, root, ConfigPath, "version: 1\nlimits: 3\n")
+	_, err = LoadConfig(root)
+	if se, _ := sys.AsError(err); se == nil || se.Detail != filepath.Join(root, ConfigPath) {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestLoadConfigUnreadableTeamFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, ConfigPath, "version: 1\n")
+	if err := os.MkdirAll(filepath.Join(root, ModelsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(root)
+	se, ok := sys.AsError(err)
+	if !ok || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
+		!strings.HasPrefix(se.Detail, "read "+filepath.Join(root, ModelsPath)+": ") || len(se.Lines) != 0 {
+		t.Fatalf("got %+v", err)
 	}
 }
 
@@ -416,8 +544,8 @@ func TestProviderSelections(t *testing.T) {
 	const section = "models"
 	for _, role := range []string{"shape", "build", "review"} {
 		parse := func(fields string) (Role, *sys.Error) {
-			text := "version: 1\n" + section + ":\n  " + role + ": {" + fields + "}\n"
-			cfg, err := ParseConfig(text, "/project/.kogen/project.yaml")
+			text := section + ":\n  " + role + ": {" + fields + "}\n"
+			cfg, err := loadModelsText(t, text)
 			if err != nil {
 				se, _ := sys.AsError(err)
 				return Role{}, se
@@ -458,14 +586,14 @@ func TestProviderSelections(t *testing.T) {
 		// A named provider other than ChatGPT still needs a non-blank model and effort.
 		for _, fields := range []string{"model: '', effort: high, provider: supergrok", "model: kimi-k3, effort: ' ', provider: opencode-go"} {
 			_, se := parse(fields)
-			want := "line 3: " + section + "." + role + " must be {model, effort}"
+			want := "line 2: " + section + "." + role + " must be {model, effort}"
 			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{want}) {
 				t.Errorf("%s.%s %s: %+v", section, role, fields, se)
 			}
 		}
 		for _, provider := range []string{"grok", "xai", "true", "null", "claude", "opencode", "openai", "ollama"} {
 			_, se := parse("model: grok-4.7, effort: low, provider: " + provider)
-			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible"}) {
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible"}) {
 				t.Errorf("%s.%s provider %s: %+v", section, role, provider, se)
 			}
 		}
@@ -488,7 +616,7 @@ func TestProviderSelections(t *testing.T) {
 			{"model: gpt-6.1-sol, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
 		} {
 			_, se := parse(c.fields)
-			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 3: " + section + "." + role + c.want}) {
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + c.want}) {
 				t.Errorf("%s.%s %s: %+v", section, role, c.fields, se)
 			}
 		}
@@ -526,8 +654,8 @@ func TestEffortPerRoute(t *testing.T) {
 		{"provider: opencode-go, model: m", "ultra", false, "any effort except ultra"},
 		{"provider: openai-compatible, base_url: 'http://h/v1', model: m", "ultra", false, "any effort except ultra"},
 	} {
-		text := "version: 1\nmodels:\n  build: {" + tt.fields + ", effort: " + tt.effort + "}\n"
-		_, err := ParseConfig(text, "f")
+		text := "models:\n  build: {" + tt.fields + ", effort: " + tt.effort + "}\n"
+		_, err := loadModelsText(t, text)
 		if tt.ok {
 			if err != nil {
 				t.Errorf("%q: %v", text, err)
@@ -557,7 +685,7 @@ func TestBuildExecutorSelection(t *testing.T) {
 		{"no executor", "{model: gpt-6.1-sol, effort: medium}", Role{Model: "gpt-6.1-sol", Effort: "medium"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := mustParse(t, "version: 1\nmodels:\n  build: "+tt.build+"\n")
+			cfg := modelsConfig(t, "models:\n  build: "+tt.build+"\n")
 			if got := cfg.Models["build"]; got != tt.want {
 				t.Fatalf("build = %+v, want %+v", got, tt.want)
 			}
@@ -567,7 +695,7 @@ func TestBuildExecutorSelection(t *testing.T) {
 		})
 	}
 	// Block form.
-	cfg := mustParse(t, "version: 1\nmodels:\n  build:\n    executor: claude-code\n    model: m\n    effort: low\n")
+	cfg := modelsConfig(t, "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: low\n")
 	if got := cfg.Models["build"]; got != (Role{Model: "m", Effort: "low", Executor: "claude-code"}) {
 		t.Fatalf("block form %+v", got)
 	}
@@ -587,9 +715,9 @@ func TestRemovedMaxRounds(t *testing.T) {
 		{"build", "max_rounds: nonsense"},
 	} {
 		t.Run(tc.role+tc.options, func(t *testing.T) {
-			se := configError(t, "version: 1\nmodels:\n  "+tc.role+": {"+tc.options+"}\n", "f")
-			want := "line 3: models." + tc.role + ".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"
-			if !slices.Equal(se.Lines, []string{want}) || !strings.Contains(se.Detail, "f") {
+			se := modelsError(t, "models:\n  "+tc.role+": {"+tc.options+"}\n")
+			want := "line 2: models." + tc.role + ".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"
+			if !slices.Equal(se.Lines, []string{want}) || !strings.HasSuffix(se.Detail, ModelsPath) {
 				t.Fatalf("%+v", se)
 			}
 		})
@@ -597,24 +725,24 @@ func TestRemovedMaxRounds(t *testing.T) {
 }
 
 func TestBuildExecutorConfigurationErrors(t *testing.T) {
-	const head = "version: 1\nmodels:\n  "
+	const head = "models:\n  "
 	for _, tt := range []struct{ name, text, want string }{
-		{"unknown executor", "build: {executor: codex, model: m, effort: e}", "line 3: models.build.executor must be native or claude-code"},
-		{"executor is not a string", "build: {executor: true, model: m, effort: e}", "line 3: models.build.executor must be native or claude-code"},
-		{"executor is empty", "build: {executor: , model: m, effort: e}", "line 3: models.build.executor must be native or claude-code"},
+		{"unknown executor", "build: {executor: codex, model: m, effort: e}", "line 2: models.build.executor must be native or claude-code"},
+		{"executor is not a string", "build: {executor: true, model: m, effort: e}", "line 2: models.build.executor must be native or claude-code"},
+		{"executor is empty", "build: {executor: , model: m, effort: e}", "line 2: models.build.executor must be native or claude-code"},
 		{"claude-code forbids provider", "build: {executor: claude-code, provider: anthropic, model: m, effort: e}",
-			"line 3: models.build.provider is not allowed with executor claude-code"},
+			"line 2: models.build.provider is not allowed with executor claude-code"},
 		{"claude-code forbids base_url", "build: {executor: claude-code, base_url: 'http://localhost:1/v1', model: m, effort: e}",
-			"line 3: models.build.base_url is not allowed with executor claude-code"},
-		{"claude-code needs a model", "build: {executor: claude-code, effort: e}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
-		{"claude-code needs an effort", "build: {executor: claude-code, model: m}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
-		{"claude-code needs non-blank model", "build: {executor: claude-code, model: ' ', effort: e}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
-		{"claude-code takes no other key", "build: {executor: claude-code, model: m, effort: e, sandbox: true}", "line 3: models.build with executor claude-code must be {model, effort} non-blank strings"},
-		{"review unknown executor", "review: {executor: codex, model: m, effort: e}", "line 3: models.review.executor must be native or claude-code"},
-		{"shape claude-code forbids provider", "shape: {executor: claude-code, provider: anthropic, model: m, effort: e}", "line 3: models.shape.provider is not allowed with executor claude-code"},
+			"line 2: models.build.base_url is not allowed with executor claude-code"},
+		{"claude-code needs a model", "build: {executor: claude-code, effort: e}", "line 2: models.build with executor claude-code must be {model, effort} non-blank strings"},
+		{"claude-code needs an effort", "build: {executor: claude-code, model: m}", "line 2: models.build with executor claude-code must be {model, effort} non-blank strings"},
+		{"claude-code needs non-blank model", "build: {executor: claude-code, model: ' ', effort: e}", "line 2: models.build with executor claude-code must be {model, effort} non-blank strings"},
+		{"claude-code takes no other key", "build: {executor: claude-code, model: m, effort: e, sandbox: true}", "line 2: models.build with executor claude-code must be {model, effort} non-blank strings"},
+		{"review unknown executor", "review: {executor: codex, model: m, effort: e}", "line 2: models.review.executor must be native or claude-code"},
+		{"shape claude-code forbids provider", "shape: {executor: claude-code, provider: anthropic, model: m, effort: e}", "line 2: models.shape.provider is not allowed with executor claude-code"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			se := configError(t, head+tt.text+"\n", "f")
+			se := modelsError(t, head+tt.text+"\n")
 			if se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 || !slices.Equal(se.Lines, []string{tt.want}) {
 				t.Fatalf("%+v", se)
 			}
@@ -632,7 +760,7 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 	// Every subset of roles may be external; the others keep their native configuration.
 	for mask := 0; mask < 8; mask++ {
 		var text strings.Builder
-		text.WriteString("version: 1\nmodels:\n")
+		text.WriteString("models:\n")
 		want := DefaultModels()
 		for i, r := range roles {
 			switch {
@@ -644,7 +772,7 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 				want[r] = Role{Model: "gpt-6.1-sol", Effort: "medium"}
 			}
 		}
-		cfg := mustParse(t, text.String())
+		cfg := modelsConfig(t, text.String())
 		for _, r := range roles {
 			if cfg.Models[r] != want[r] {
 				t.Fatalf("mask %d: %s = %+v, want %+v", mask, r, cfg.Models[r], want[r])
@@ -658,18 +786,18 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 		t.Fatalf("default rounds %d", DefaultExternalRounds)
 	}
 	for _, r := range roles {
-		se := configError(t, "version: 1\nmodels:\n  "+r+": {executor: claude-code, base_url: 'http://x/v1', model: m, effort: e}\n", "f")
-		if !slices.Equal(se.Lines, []string{"line 3: models." + r + ".base_url is not allowed with executor claude-code"}) {
+		se := modelsError(t, "models:\n  "+r+": {executor: claude-code, base_url: 'http://x/v1', model: m, effort: e}\n")
+		if !slices.Equal(se.Lines, []string{"line 2: models." + r + ".base_url is not allowed with executor claude-code"}) {
 			t.Fatalf("%s: %+v", r, se)
 		}
-		se = configError(t, "version: 1\nmodels:\n  "+r+": {executor: claude-code, model: m, effort: ' '}\n", "f")
-		if !slices.Equal(se.Lines, []string{"line 3: models." + r + " with executor claude-code must be {model, effort} non-blank strings"}) {
+		se = modelsError(t, "models:\n  "+r+": {executor: claude-code, model: m, effort: ' '}\n")
+		if !slices.Equal(se.Lines, []string{"line 2: models." + r + " with executor claude-code must be {model, effort} non-blank strings"}) {
 			t.Fatalf("%s: %+v", r, se)
 		}
 	}
 	// Explicit native normalizes to omission: identical role bytes.
-	a := mustParse(t, "version: 1\nmodels:\n  review: {executor: native, model: m, effort: e}\n").Models["review"]
-	b := mustParse(t, "version: 1\nmodels:\n  review: {model: m, effort: e}\n").Models["review"]
+	a := modelsConfig(t, "models:\n  review: {executor: native, model: m, effort: e}\n").Models["review"]
+	b := modelsConfig(t, "models:\n  review: {model: m, effort: e}\n").Models["review"]
 	if a != b {
 		t.Fatalf("explicit native %+v differs from omission %+v", a, b)
 	}
@@ -689,13 +817,10 @@ func TestNativeRoleJSONKeepsItsBytes(t *testing.T) {
 
 func TestLegacyNoProgressKeysAreNotSettings(t *testing.T) {
 	// The removed native fingerprint option was never a YAML setting, and its two legacy
-	// spellings are not read: they are an unrecognized role key like any other. Strict loading
-	// keeps reporting that (unchanged), and the readable view leaves the role at its default,
-	// exactly as the same input without the key.
-	const plain = "version: 1\nmodels:\n  shape: {model: gpt-6.1-sol, effort: high}\n  build: {model: gpt-6.1-sol, effort: medium}\n  review: {model: gpt-6.1-terra, effort: medium}\n"
-	want := ReadableConfig(plain)
-	if !maps.Equal(want.Models, DefaultModels()) {
-		t.Fatalf("control models %+v", want.Models)
+	// spellings are not read: they are an unrecognized role key like any other in a models file.
+	const plain = "models:\n  shape: {model: gpt-6.1-sol, effort: high}\n  build: {model: gpt-6.1-sol, effort: medium}\n  review: {model: gpt-6.1-terra, effort: medium}\n"
+	if cfg := modelsConfig(t, plain); !maps.Equal(cfg.Models, DefaultModels()) {
+		t.Fatalf("control models %+v", cfg.Models)
 	}
 	for _, key := range []string{"No" + "Progress", "no_progress"} {
 		for _, role := range []string{"shape", "build", "review"} {
@@ -703,19 +828,10 @@ func TestLegacyNoProgressKeysAreNotSettings(t *testing.T) {
 			if text == plain {
 				t.Fatalf("fixture did not add %s to %s", key, role)
 			}
-			got := ReadableConfig(text)
-			if !maps.Equal(got.Models, want.Models) || RenderConfig(got) != RenderConfig(want) {
-				t.Errorf("%s in %s: readable %+v, want %+v", key, role, got.Models, want.Models)
-			}
-			raw, _ := json.Marshal(got.Models)
-			wantRaw, _ := json.Marshal(want.Models)
-			if string(raw) != string(wantRaw) || strings.Contains(string(raw), "rogress") {
-				t.Errorf("%s in %s: role JSON %s, want %s", key, role, raw, wantRaw)
-			}
-			control := configError(t, strings.Replace(text, key+":", "unrelated_key:", 1), "/project/.kogen/project.yaml")
-			legacy := configError(t, text, "/project/.kogen/project.yaml")
+			control := modelsError(t, strings.Replace(text, key+":", "unrelated_key:", 1))
+			legacy := modelsError(t, text)
 			if legacy.Reason != "project_config_invalid" || !slices.Equal(legacy.Lines, control.Lines) {
-				t.Errorf("%s in %s: strict loading %+v, an unrelated key gives %+v", key, role, legacy, control)
+				t.Errorf("%s in %s: loading %+v, an unrelated key gives %+v", key, role, legacy, control)
 			}
 		}
 	}
@@ -741,7 +857,7 @@ func TestParseConfigIgnoresOneLeadingBOM(t *testing.T) {
 	}
 }
 
-const localBase = "version: 1\ncommands:\n  setup: [s]\n  fix: [f]\n  checks:\n    - {name: format, run: fmt}\n    - {name: compile, run: build}\n    - {name: vet, run: vet}\n  acceptance: {run: acc, steps_dir: features/steps}\nprotect: [p]\nmodels:\n  shape: {provider: chatgpt, model: gpt-6.1-sol, effort: low}\n"
+const localBase = "version: 1\ncommands:\n  setup: [s]\n  fix: [f]\n  checks:\n    - {name: format, run: fmt}\n    - {name: compile, run: build}\n    - {name: vet, run: vet}\n  acceptance: {run: acc, steps_dir: features/steps}\nprotect: [p]\n"
 
 // localRoot is a project root holding the committed configuration and the given local files.
 func localRoot(t *testing.T, models, checks string) string {
@@ -810,7 +926,7 @@ func TestLoadConfigLocalChecksReplaceCommandsByName(t *testing.T) {
 	if !slices.Equal(cfg.Setup, []string{"s"}) || !slices.Equal(cfg.Fix, []string{"f"}) || cfg.Acceptance.Run != "acc" || !slices.Equal(cfg.Protect, []string{"p"}) {
 		t.Errorf("setup, fix, acceptance or protect changed: %+v", cfg)
 	}
-	if cfg.Models["shape"] != (Role{Provider: "chatgpt", Model: "gpt-6.1-sol", Effort: "low"}) {
+	if !maps.Equal(cfg.Models, DefaultModels()) {
 		t.Errorf("models changed: %+v", cfg.Models)
 	}
 	if got := readFile(t, filepath.Join(root, LocalChecksPath)); got != checks {

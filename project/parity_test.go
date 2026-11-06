@@ -11,7 +11,9 @@ import (
 // Intent packages of this repository (Kogen.Intent.baseline/3 and hash/2, via `mix run`): the
 // baseline file list in card order and the approval hash, over the exact bytes of those files,
 // which parity.json carries as recorded inputs. The approval hash a user types must be identical
-// between the two implementations.
+// between the two implementations. The recorded `.kogen/project.yaml` carries a models block,
+// which the project file no longer accepts: the test moves it to `.kogen/models.yaml`, so the
+// baselines list that team file and the recorded hashes are the Go results over the moved files.
 //
 // `go test ./... -update` records the current Go baseline and hash only for the cases that no
 // longer match; matching cases and the files stay as recorded. Changing a recorded approval hash
@@ -40,6 +42,12 @@ func TestIntentHashMatchesElixir(t *testing.T) {
 	}
 	root := gitRepo(t)
 	for p, content := range parity.Files {
+		if p == ConfigPath {
+			// The recorded project file carries the removed models block: it is now the team file.
+			var models string
+			content, models = splitModelsBlock(content)
+			writeFile(t, root, ModelsPath, models)
+		}
 		writeFile(t, root, p, content)
 	}
 	cfg, err := LoadConfig(root)

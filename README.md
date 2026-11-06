@@ -6,7 +6,7 @@ It is a component of [Kogen](https://github.com/KogenAI/kogen), which pins an ex
 
 ## Packages
 
-- `project`: what Kogen keeps about a project: `.kogen/project.yaml` (commands, checks, roles and models, protect patterns), Intents (`intent.md`, `acceptance.feature`, stages), the approval baseline and its hash, and Shape provenance receipts.
+- `project`: what Kogen keeps about a project: `.kogen/project.yaml` (commands, checks, protect patterns), the model lineup files `.kogen/models.yaml` and `.kogen/local/models.yaml`, Intents (`intent.md`, `acceptance.feature`, stages), the approval baseline and its hash, and Shape provenance receipts.
 - `git`: Kogen's window on Git: repository discovery, the target-repository commit, locks, execution pins, candidate trees, diffs and the index.
 - `durable`: the one place Kogen flushes a file to stable storage.
 - `route`: the outer routing of a Build's candidate through its phases (verify, independent review with its repairs, the implementer's repair of a red candidate, commit) and the resume of a Build stopped at one of those steps. The phases are reached through narrow interfaces (`route.Steps`); each keeps its own policies and state.
@@ -16,10 +16,18 @@ It is a component of [Kogen](https://github.com/KogenAI/kogen), which pins an ex
 
 ## Opt-in model lineup API
 
-`project.LoadConfig` takes its models from `.kogen/project.yaml`, overlaid by the host-local files
-described under [Host-local lineups and checks](#host-local-lineups-and-checks). `ParseConfig`,
-`ReadableConfig`, `RenderConfig` and the other configuration APIs use only the models in
-`.kogen/project.yaml`. Consumers may explicitly call `project.LoadModels(root)` to read the required team lineup at
+Model roles live only in the models files: the team file `.kogen/models.yaml`
+(`project.ModelsPath`) and the host-local `.kogen/local/models.yaml` (`project.LocalModelsPath`).
+`.kogen/project.yaml` no longer accepts a `models:` key: `ParseConfig`, `LoadConfig` and
+`ReadableConfig`'s validation refuse it as `environment/project_config_invalid` (exit 3) with the
+file and `line N: models is no longer read from .kogen/project.yaml; move the model lineup to
+.kogen/models.yaml`, and there is no legacy read or migration. `ReadableConfig` returns the other
+keys it could read and `DefaultModels()` for the roles. `project.LoadConfig` takes every role from
+the files, later winning per whole role: `project.DefaultModels()`, then `.kogen/models.yaml` when
+it exists, then `.kogen/local/models.yaml` when it exists, as described under
+[Host-local lineups and checks](#host-local-lineups-and-checks). `RenderConfig` and
+`project.Template()` write no `models:` block, whatever `Config.Models` holds.
+Consumers may call `project.LoadModels(root)` to read the required team lineup at
 `project.ModelsPath` (`.kogen/models.yaml`) and the optional machine override at
 `project.LocalModelsPath` (`.kogen/local/models.yaml`). Both files contain only a root `models:`
 mapping of shape, build and review roles using the existing role validation. Missing team roles
@@ -29,7 +37,7 @@ source of each role, including defaults. Invalid files report configuration erro
 line diagnostics; neither file is written by the loader. `project.ModelsTemplate()` returns a
 team file with the defaults in `ModelRoles` order.
 
-The former `models.<role>.max_rounds` setting is rejected in all three files. An external
+The former `models.<role>.max_rounds` setting is rejected in both models files. An external
 executor's own round limit caps a role; when it supplies none, 6 caps a review role.
 `Role.MaxRounds` remains available for consumers and is zero for loaded roles.
 
@@ -50,19 +58,19 @@ file was absent and nothing else changed.
 
 ## Host-local lineups and checks
 
-`project.LoadConfig(root)` reads two optional host-local files and applies them over the committed
-`.kogen/project.yaml`: role lineups from `.kogen/local/models.yaml` (`project.LocalModelsPath`)
-and check commands from `.kogen/local/checks.yaml` (`project.LocalChecksPath`). Every consumer
+`project.LoadConfig(root)` reads the model lineup from the team file `.kogen/models.yaml` and the
+host-local `.kogen/local/models.yaml` (`project.LocalModelsPath`), and applies the check commands of
+the host-local `.kogen/local/checks.yaml` (`project.LocalChecksPath`) over the committed
+`.kogen/project.yaml`. Every consumer
 that loads the configuration through `LoadConfig` (Build, Shape and Review at the checkout root)
 gets the host's values with no commit. `.kogen/local/` is ignored by Kogen-initialized
-repositories, so the files are never committed or part of a candidate tree. Without them,
-`LoadConfig` returns what it returned before. `LoadConfig` still does not read the team file
-`.kogen/models.yaml`.
+repositories, so the files are never committed or part of a candidate tree. Without the local
+files the roles are the team file's over the defaults; without the team file they are the defaults.
 
-- Lineup: a root `models:` mapping with the schema and validation `LoadModels` applies to its local
-  file (roles `shape`, `build` and `review`; `plan` is unknown; `max_rounds` is rejected). Each
-  role the file names replaces the whole committed role, so no committed provider survives; a role
-  it does not name keeps the committed role or the default.
+- Lineup: a root `models:` mapping with the schema and validation `LoadModels` applies to its files
+  (roles `shape`, `build` and `review`; `plan` is unknown; `max_rounds` is rejected), the same for
+  the team and the local file. Each role a file names replaces the whole role of the files before
+  it, so no earlier provider survives; a role no file names keeps the default.
 - Checks: a root `checks:` list of `{name, run}`. Each entry's `run` replaces the `Run` of the
   committed check with that name. `Config.Checks` keeps the committed names in the committed
   order, whatever the local order; a committed check the file does not name keeps its command,
@@ -71,8 +79,9 @@ repositories, so the files are never committed or part of a candidate tree. With
 - Errors: a local file that exists but cannot be read is `environment/project_config_invalid`
   (exit 3) with detail `read <root>/<path>: <error>`. A malformed file fails the load with the same
   class and exit, the detail `<root>/<path>` and one `line N: <message>` line per problem. The
-  committed file's errors come first, then the first failing of the local models file and the
-  local checks file; no Config is returned, so a Build stops before any model call.
+  committed file's errors come first, then the first failing of the team models file, the local
+  models file and the local checks file, in that order; an unreadable team file is reported like an
+  unreadable local file, with detail `read <root>/.kogen/models.yaml: <error>`; no Config is returned, so a Build stops before any model call.
 - The local files are not in the approval baseline, so changing them never changes an approval
   hash. Neither they nor the committed configuration are ever written.
 

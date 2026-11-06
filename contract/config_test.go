@@ -38,10 +38,22 @@ shape_decision_check:
   enabled: true
 review_material:
   mode: on_demand
-models:
+`
+
+// teamModels is the lineup of the team file `.kogen/models.yaml`, where model roles live.
+const teamModels = `models:
   shape: {provider: anthropic, model: m, effort: max}
   build: {provider: openai-compatible, model: b, effort: high, base_url: "http://localhost:11434/v1/"}
 `
+
+// loadWithTeamModels loads a project whose team file holds models.
+func loadWithTeamModels(t *testing.T, models string) (*project.Config, error) {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, root, project.ConfigPath, "version: 1\n")
+	writeFile(t, root, project.ModelsPath, models)
+	return project.LoadConfig(root)
+}
 
 // config-path: kogen-shaping shape/helper_test.go and shape_test.go write the project file to
 // .kogen/project.yaml and read it back with LoadConfig; kogen cli/repository_config_test.go
@@ -50,6 +62,7 @@ func TestConfigPathAndLoad(t *testing.T) {
 	equal(t, "ConfigPath", project.ConfigPath, ".kogen/project.yaml")
 	root := t.TempDir()
 	writeFile(t, root, ".kogen/project.yaml", fullConfig)
+	writeFile(t, root, project.ModelsPath, teamModels)
 	cfg, err := project.LoadConfig(root)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +71,9 @@ func TestConfigPathAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ParseConfig reads only the project file: its roles are the defaults.
+	equal(t, "ParseConfig models", reflect.DeepEqual(parsed.Models, project.DefaultModels()), true)
+	parsed.Models = cfg.Models
 	if !reflect.DeepEqual(cfg, parsed) {
 		t.Fatalf("LoadConfig = %+v, ParseConfig = %+v", cfg, parsed)
 	}
@@ -99,8 +115,8 @@ func TestConfigPathAndLoad(t *testing.T) {
 // config-local-overlay: kogen-build build/build.go, kogen-shaping and kogen-review load the
 // configuration with LoadConfig(root); the host-local lineup and checks reach them through it.
 func TestConfigLocalOverlay(t *testing.T) {
-	const committed = "version: 1\ncommands:\n  checks:\n    - {name: a, run: ra}\n    - {name: b, run: rb}\n" +
-		"models:\n  shape: {provider: chatgpt, model: gpt-6.1-sol, effort: low}\n"
+	const committed = "version: 1\ncommands:\n  checks:\n    - {name: a, run: ra}\n    - {name: b, run: rb}\n"
+	const team = "models:\n  shape: {provider: chatgpt, model: gpt-6.1-sol, effort: low}\n  build: {provider: anthropic, model: claude-opus-5-5, effort: max}\n"
 	const models = "models:\n  shape: {executor: claude-code, model: claude-opus-5-5, effort: high}\n"
 	const checks = "checks:\n  - {name: b, run: local-b}\n  - {name: a, run: local-a}\n"
 	root := t.TempDir()
@@ -109,6 +125,14 @@ func TestConfigLocalOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	equal(t, "without models files", reflect.DeepEqual(plain.Models, project.DefaultModels()), true)
+	writeFile(t, root, project.ModelsPath, team)
+	teamCfg, err := project.LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "team shape", teamCfg.Models["shape"], project.Role{Provider: "chatgpt", Model: "gpt-6.1-sol", Effort: "low"})
+	equal(t, "team review is the default", teamCfg.Models["review"], project.DefaultModels()["review"])
 	writeFile(t, root, project.LocalModelsPath, models)
 	writeFile(t, root, project.LocalChecksPath, checks)
 	cfg, err := project.LoadConfig(root)
@@ -119,7 +143,8 @@ func TestConfigLocalOverlay(t *testing.T) {
 		t.Fatalf("Checks = %+v, want %+v", cfg.Checks, want)
 	}
 	equal(t, "shape", cfg.Models["shape"], project.Role{Executor: "claude-code", Model: "claude-opus-5-5", Effort: "high"})
-	equal(t, "build", cfg.Models["build"], plain.Models["build"])
+	equal(t, "build", cfg.Models["build"], teamCfg.Models["build"])
+	equal(t, "team file", readFile(t, filepath.Join(root, project.ModelsPath)), team)
 	equal(t, "project file", readFile(t, filepath.Join(root, project.ConfigPath)), committed)
 	equal(t, "models file", readFile(t, filepath.Join(root, project.LocalModelsPath)), models)
 	equal(t, "checks file", readFile(t, filepath.Join(root, project.LocalChecksPath)), checks)
@@ -132,6 +157,21 @@ func TestConfigLocalOverlay(t *testing.T) {
 	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
 	equal(t, "Detail", e.Detail, filepath.Join(root, project.LocalChecksPath))
 	equalList(t, "Lines", e.Lines, []string{"line 2: check name c is not in .kogen/project.yaml"})
+}
+
+// models-only-in-models-yaml: a models key of the project file is refused, with its line.
+func TestConfigRefusesModelsKey(t *testing.T) {
+	text := "version: 1\ncommands:\n  checks:\n    - name: test\n      run: t\nmodels:\n  build: {model: m, effort: high}\n"
+	root := t.TempDir()
+	writeFile(t, root, project.ConfigPath, text)
+	_, err := project.LoadConfig(root)
+	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
+	equal(t, "detail", e.Detail, filepath.Join(root, project.ConfigPath))
+	want := []string{"line 6: models is no longer read from .kogen/project.yaml; move the model lineup to .kogen/models.yaml"}
+	equalList(t, "lines", e.Lines, want)
+	_, err = project.ParseConfig(text, "f.yaml")
+	e = wantSysError(t, err, "environment", "project_config_invalid", 3)
+	equalList(t, "ParseConfig lines", e.Lines, want)
 }
 
 // config-invalid-lines: kogen-shaping shape/init_test.go expects the invalid-configuration
@@ -189,7 +229,7 @@ func TestExecutorRoleLineup(t *testing.T) {
 	equal(t, "ExecutorClaudeCode", project.ExecutorClaudeCode, "claude-code")
 	equal(t, "ExecutorNative", project.ExecutorNative, "native")
 
-	cfg, err := project.ParseConfig("version: 1\nmodels:\n  shape: {executor: claude-code, model: m, effort: high}\n", "f")
+	cfg, err := loadWithTeamModels(t, "models:\n  shape: {executor: claude-code, model: m, effort: high}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,16 +241,16 @@ func TestExecutorRoleLineup(t *testing.T) {
 		t.Fatalf("Executor = %q", got)
 	}
 
-	_, err = project.ParseConfig("version: 1\nmodels:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n", "f")
+	_, err = loadWithTeamModels(t, "models:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n")
 	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
-	equalList(t, "lines", e.Lines, []string{"line 3: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
+	equalList(t, "lines", e.Lines, []string{"line 2: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
 
 	// An explicit native role is the omitted one, and neither names an executor in its state.
-	omitted, err := project.ParseConfig("version: 1\nmodels:\n  review: {model: r, effort: high}\n", "f")
+	omitted, err := loadWithTeamModels(t, "models:\n  review: {model: r, effort: high}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	explicit, err := project.ParseConfig("version: 1\nmodels:\n  review: {executor: native, model: r, effort: high}\n", "f")
+	explicit, err := loadWithTeamModels(t, "models:\n  review: {executor: native, model: r, effort: high}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,18 +263,19 @@ func TestExecutorRoleLineup(t *testing.T) {
 	}
 	equal(t, "native role JSON", string(b), `{"Provider":"","Model":"r","Effort":"high"}`)
 
-	_, err = project.ParseConfig("version: 1\nmodels:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n", "f")
+	_, err = loadWithTeamModels(t, "models:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n")
 	e = wantSysError(t, err, "environment", "project_config_invalid", 3)
-	equalList(t, "lines", e.Lines, []string{"line 3: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
+	equalList(t, "lines", e.Lines, []string{"line 2: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
 }
 
 // kogen cli/readiness/readiness.go reads what it can of an invalid file and lists the model
 // roles in the template's order.
 func TestReadableConfigAndModelRoles(t *testing.T) {
 	equalList(t, "ModelRoles", project.ModelRoles[:], []string{"shape", "build", "review"})
+	// A models key is refused by validation, not applied: the roles stay the defaults.
 	readable := project.ReadableConfig("version: 1\nprotect:\n  - keep\nbogus: 1\nmodels:\n  build: {model: x, effort: low}\n")
 	equalList(t, "Protect", readable.Protect, []string{"keep"})
-	equal(t, "build Model", readable.Models["build"].Model, "x")
+	equal(t, "build is the default", readable.Models["build"], project.DefaultModels()["build"])
 	broken := project.ReadableConfig("version: 1\n\tbad: [\n")
 	if !reflect.DeepEqual(broken.Models, project.DefaultModels()) || len(broken.Protect) != 0 {
 		t.Fatalf("ReadableConfig of an unparsable file = %+v", broken)
@@ -266,6 +307,7 @@ func TestTemplateAndRenderConfig(t *testing.T) {
 		t.Fatalf("template %q", tpl)
 	}
 	equal(t, "empty render is the template", project.RenderConfig(cfg), tpl)
+	equal(t, "the template has no models block", strings.Contains(tpl, "models:"), false)
 
 	kept := &project.Config{
 		Setup:      []string{"go mod download"},
@@ -280,6 +322,7 @@ func TestTemplateAndRenderConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, rendered)
 	}
+	equal(t, "rendered has no models block", strings.Contains(rendered, "models:"), false)
 	kept.ShapeWorkers.Roles = map[string]project.Role{}
 	kept.ReviewMaterial.Mode = "parts"
 	if !reflect.DeepEqual(back, kept) {
