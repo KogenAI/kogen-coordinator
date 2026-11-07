@@ -2,6 +2,7 @@ package project
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/KogenAI/kogen-coordinator/durable"
 )
@@ -330,4 +332,83 @@ func WriteApproval(root string, a Approval) error {
 		return err
 	}
 	return nil
+}
+
+// CheckResult is what the check baseline decided for one check: the command as configured and the
+// status and output the runner returned.
+type CheckResult struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	Status  int    `json:"status"`
+	Output  string `json:"output"`
+}
+
+// CheckTiming is the start, end and wall time of one check of the check baseline.
+type CheckTiming struct {
+	Name      string    `json:"name"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+	WallMS    int64     `json:"wall_ms"`
+}
+
+// CheckBaseline is the record of one check baseline pass: the decided results, its own start and
+// end instants and wall time, and the timing of each completed check, in the same order.
+type CheckBaseline struct {
+	Checks    []CheckResult `json:"checks"`
+	StartedAt time.Time     `json:"started_at"`
+	EndedAt   time.Time     `json:"ended_at"`
+	WallMS    int64         `json:"wall_ms"`
+	Timings   []CheckTiming `json:"timings"`
+}
+
+// CheckRunner runs one check and returns its exit status and output. An error is a failure to run
+// it, not a nonzero status.
+type CheckRunner func(ctx context.Context, c Check) (status int, output string, err error)
+
+// BaselineStop is the error of a check baseline whose context ended while a check ran. It names
+// that check and unwraps to the context error.
+type BaselineStop struct {
+	Check     string
+	Command   string
+	StartedAt time.Time
+	StoppedAt time.Time
+	WallMS    int64
+	Err       error
+}
+
+func (s *BaselineStop) Error() string {
+	return fmt.Sprintf("stopped during the check baseline: check %s (%s) ran %d ms: %v", s.Check, s.Command, s.WallMS, s.Err)
+}
+
+func (s *BaselineStop) Unwrap() error { return s.Err }
+
+// RunCheckBaseline runs every check once, in order, through run and records the baseline's and
+// each check's wall time. A nonzero status is recorded and the next check runs. When ctx has ended
+// once a check's run returns, it stops with a *BaselineStop and the checks completed before that
+// one; a runner error while ctx is live is returned unchanged with the same partial record. It adds
+// no timeout of its own: ctx is the only bound.
+func RunCheckBaseline(ctx context.Context, checks []Check, run CheckRunner) (CheckBaseline, error) {
+	start := time.Now()
+	rec := CheckBaseline{Checks: []CheckResult{}, Timings: []CheckTiming{}}
+	finish := func(end time.Time) CheckBaseline {
+		rec.StartedAt = start.UTC()
+		rec.EndedAt = end.UTC()
+		rec.WallMS = end.Sub(start).Milliseconds()
+		return rec
+	}
+	for _, c := range checks {
+		cStart := time.Now()
+		status, output, err := run(ctx, c)
+		cEnd := time.Now()
+		wall := cEnd.Sub(cStart).Milliseconds()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return finish(cEnd), &BaselineStop{Check: c.Name, Command: c.Run, StartedAt: cStart.UTC(), StoppedAt: cEnd.UTC(), WallMS: wall, Err: ctxErr}
+		}
+		if err != nil {
+			return finish(cEnd), err
+		}
+		rec.Checks = append(rec.Checks, CheckResult{Name: c.Name, Command: c.Run, Status: status, Output: output})
+		rec.Timings = append(rec.Timings, CheckTiming{Name: c.Name, StartedAt: cStart.UTC(), EndedAt: cEnd.UTC(), WallMS: wall})
+	}
+	return finish(time.Now()), nil
 }
