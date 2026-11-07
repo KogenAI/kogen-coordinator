@@ -559,7 +559,7 @@ func TestIntentPathsAndExistence(t *testing.T) {
 		t.Error("exists")
 	}
 	err := RequireIntentDir(root, "a-b")
-	if se, ok := sys.AsError(err); !ok || se.Render() != "intent/not_found: Intent does not exist\n" || se.Exit != 2 {
+	if se, ok := sys.AsError(err); !ok || se.Render() != "intent/not_found: Intent does not exist: a-b (looked in .kogen/intents/a-b)\n  kogen intent list shows existing Intents; kogen intent shape a-b <request-file> creates one\n" || se.Exit != 2 {
 		t.Errorf("got %v", err)
 	}
 	writeFile(t, root, IntentMDPath("a-b"), "# x\n")

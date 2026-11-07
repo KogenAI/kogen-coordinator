@@ -26,7 +26,9 @@ func TestIntentExistsAndRequireIntentDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := wantSysError(t, project.RequireIntentDir(f.Dir, "other"), "intent", "not_found", 2)
-	equal(t, "detail", e.Detail, "Intent does not exist")
+	equal(t, "detail", e.Detail, "Intent does not exist: other (looked in .kogen/intents/other)")
+	equal(t, "lines", strings.Join(e.Lines, "\n"),
+		"kogen intent list shows existing Intents; kogen intent shape other <request-file> creates one\ndid you mean: "+fixtureSlug+"?")
 }
 
 // kogen-shaping shape/window.go and kogen-build build/builder.go read the fields of an Intent.

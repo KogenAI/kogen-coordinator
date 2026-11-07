@@ -63,9 +63,71 @@ func IntentExists(root, slug string) bool {
 // RequireIntentDir fails with intent/not_found when the Intent's folder does not exist.
 func RequireIntentDir(root, slug string) error {
 	if fi, err := os.Stat(filepath.Join(root, IntentDir(slug))); err != nil || !fi.IsDir() {
-		return sys.Fail("intent", "not_found", "Intent does not exist", 2)
+		e := sys.Fail("intent", "not_found", "Intent does not exist: "+slug+" (looked in "+IntentDir(slug)+")", 2)
+		e.Lines = []string{"kogen intent list shows existing Intents; kogen intent shape " + slug + " <request-file> creates one"}
+		if near := nearestIntents(root, slug, 2); len(near) > 0 {
+			e.Lines = append(e.Lines, "did you mean: "+strings.Join(near, ", ")+"?")
+		}
+		return e
 	}
 	return nil
+}
+
+// nearestIntents lists up to n folders directly under `.kogen/intents` other than slug, nearest to
+// slug by edit distance first, equal distances by name.
+func nearestIntents(root, slug string, n int) []string {
+	entries, err := os.ReadDir(filepath.Join(root, IntentDir("")))
+	if err != nil {
+		return nil
+	}
+	type candidate struct {
+		name string
+		dist int
+	}
+	var cands []candidate
+	for _, en := range entries {
+		if !en.IsDir() {
+			if fi, err := os.Stat(filepath.Join(root, IntentDir(en.Name()))); err != nil || !fi.IsDir() {
+				continue
+			}
+		}
+		if en.Name() != slug {
+			cands = append(cands, candidate{en.Name(), editDistance(slug, en.Name())})
+		}
+	}
+	slices.SortFunc(cands, func(a, b candidate) int {
+		if a.dist != b.dist {
+			return a.dist - b.dist
+		}
+		return strings.Compare(a.name, b.name)
+	})
+	var out []string
+	for _, c := range cands[:min(n, len(cands))] {
+		out = append(out, c.name)
+	}
+	return out
+}
+
+// editDistance is the Levenshtein distance between a and b over runes.
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
 }
 
 // fetch is a file's content from the overlay of files not yet written, or from the disk.
