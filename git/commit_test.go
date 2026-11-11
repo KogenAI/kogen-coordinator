@@ -502,7 +502,7 @@ func recordingGit(t *testing.T, f *fixture) (s *sys.Session, log, seen string) {
 umask 022
 echo "$*" >> '%[1]s'
 if [ "$1" = commit ]; then
-  { if [ -f "$4" ] && [ ! -L "$4" ]; then echo regular; else echo other; fi; stat -c %%a "$4"; cat "$4"; } > '%[2]s'
+  { if [ -f "$4" ] && [ ! -L "$4" ]; then echo regular; else echo other; fi; { stat -c %%a "$4" 2>/dev/null || stat -f %%Lp "$4"; }; cat "$4"; } > '%[2]s'
 fi
 exec '%[3]s' "$@"
 `, log, seen, realGit)), 0o755)

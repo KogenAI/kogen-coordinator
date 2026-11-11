@@ -32,7 +32,11 @@ func TestRefusal(t *testing.T) {
 
 func TestRunResults(t *testing.T) {
 	root := t.TempDir()
-	dir := t.TempDir()
+	// The shell reports the physical directory, so resolve /var -> /private/var on macOS.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := sys.NewWith(os.Environ(), root)
 	for _, tc := range []struct {
 		command string
