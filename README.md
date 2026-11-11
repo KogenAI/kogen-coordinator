@@ -37,24 +37,11 @@ source of each role, including defaults. Invalid files report configuration erro
 line diagnostics; neither file is written by the loader. `project.ModelsTemplate()` returns a
 team file with the defaults in `ModelRoles` order.
 
-The former `models.<role>.max_rounds` setting is rejected in both models files. An external
-executor's own round limit caps a role; when it supplies none, 6 caps a review role.
-`Role.MaxRounds` remains available for consumers and is zero for loaded roles.
-
-The former `shape_workers`, `shape_audit`, `shape_decision_check` and `review_material` settings are
-ignored; `Config` holds their fixed defaults (workers off, audit off, decision check off, review
-material `parts`).
-
 The approval baseline includes the team path immediately after the project configuration only
 when the project has the team file (or a `protect` pattern lists it); a project without it gets
 the baseline it had before the lineup existed. The local path is never added by this rule and is
 not automatically protected; explicit `protect` patterns continue to apply. Thus local-only
 changes do not affect the ordinary approval hash, while adding or changing the team file does.
-`project.FormerBaseline(paths)` returns a copy of a baseline with the team path inserted after
-the project configuration when it is missing: the list the former always-listed rule produced.
-A consumer that finds a saved list equal to `FormerBaseline(current)`, or an approval hash equal
-to `Hash(root, FormerBaseline(current))`, knows it was saved under the former rule while the team
-file was absent and nothing else changed.
 
 ## Host-local lineups and checks
 
@@ -68,7 +55,7 @@ repositories, so the files are never committed or part of a candidate tree. With
 files the roles are the team file's over the defaults; without the team file they are the defaults.
 
 - Lineup: a root `models:` mapping with the schema and validation `LoadModels` applies to its files
-  (roles `shape`, `build` and `review`; `plan` is unknown; `max_rounds` is rejected), the same for
+  (roles `shape`, `build` and `review`; `plan` is unknown), the same for
   the team and the local file. Each role a file names replaces the whole role of the files before
   it, so no earlier provider survives; a role no file names keeps the default.
 - Checks: a root `checks:` list of `{name, run}`. Each entry's `run` replaces the `Run` of the

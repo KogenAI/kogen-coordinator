@@ -135,10 +135,6 @@ func configJSON(c *Config) map[string]any {
 	for k, r := range c.Models {
 		models[k] = roleJSON(r)
 	}
-	workers := map[string]any{"enabled": c.ShapeWorkers.Enabled}
-	for k, r := range c.ShapeWorkers.Roles {
-		workers[k] = roleJSON(r)
-	}
 	var run, steps any = "", ""
 	if c.Acceptance != nil {
 		run, steps = c.Acceptance.Run, c.Acceptance.StepsDir
@@ -146,7 +142,7 @@ func configJSON(c *Config) map[string]any {
 	return map[string]any{
 		"setup": list(c.Setup), "fix": list(c.Fix), "checks": checks,
 		"acceptance_run": run, "steps_dir": steps,
-		"protect": list(c.Protect), "models": models, "shape_workers": workers,
+		"protect": list(c.Protect), "models": models,
 	}
 }
 

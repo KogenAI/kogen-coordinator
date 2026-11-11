@@ -307,7 +307,7 @@ func TestSourceComparisonMatchesElixir(t *testing.T) {
 func TestConfigDigestMatchesElixirTermToBinary(t *testing.T) {
 	g := loadFactsGolden(t)
 	u := updatesOf(t, factsGoldenFile)
-	if len(g.ConfigDigests) < 12 {
+	if len(g.ConfigDigests) < 10 {
 		t.Fatalf("only %d pinned digests", len(g.ConfigDigests))
 	}
 	seen := map[string]bool{}
@@ -362,7 +362,7 @@ func TestCaptureSourceMatchesElixirFileForFile(t *testing.T) {
 		key      string
 		got      string
 		recorded *string
-	}{{"head", origin.Head, &g.Repo.State.Origin.Head}, {"tree", origin.Tree, &g.Repo.State.Origin.Tree}} {
+	}{{"head", origin.Head, &g.Repo.State.Origin.Head}, {"tree", origin.Tree, &g.Repo.State.Origin.Tree}, {"configuration", origin.Configuration, &g.Repo.State.Origin.Configuration}} {
 		if f.got != *f.recorded && u.record(f.got, "repo", "state", "origin", f.key) {
 			*f.recorded = f.got
 		}

@@ -91,20 +91,6 @@ func Baseline(root, slug string, cfg *Config) ([]string, error) {
 	return slices.Insert(all, slices.Index(all, ConfigPath)+1, ModelsPath), nil
 }
 
-// FormerBaseline is the list the former rule, which always listed ModelsPath right after
-// ConfigPath, produced for the project that gave paths: a copy of paths with ModelsPath inserted
-// after the first ConfigPath when paths has ConfigPath and lacks ModelsPath, otherwise an unchanged
-// copy. paths is never modified. A saved baseline list equal to FormerBaseline of the current one,
-// or an approval hash equal to Hash of it, was saved under the former rule with the team file
-// absent: the extra entry hashes as missing.
-func FormerBaseline(paths []string) []string {
-	out := slices.Clone(paths)
-	if i := slices.Index(out, ConfigPath); i >= 0 && !slices.Contains(out, ModelsPath) {
-		out = slices.Insert(out, i+1, ModelsPath)
-	}
-	return out
-}
-
 // Protected lists the files matching `protect` (paths, folders or globs) among the tracked and the
 // not-ignored untracked files, sorted and without duplicates.
 func Protected(root string, cfg *Config) ([]string, error) {

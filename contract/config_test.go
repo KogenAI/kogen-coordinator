@@ -27,17 +27,6 @@ commands:
 protect:
   - .eslintrc
   - config/
-shape_workers:
-  enabled: true
-  read: {model: r1, effort: low}
-  probe: {model: p1, effort: low}
-  draft: {model: d1, effort: low}
-shape_audit:
-  enabled: true
-shape_decision_check:
-  enabled: true
-review_material:
-  mode: on_demand
 `
 
 // teamModels is the lineup of the team file `.kogen/models.yaml`, where model roles live.
@@ -90,17 +79,6 @@ func TestConfigPathAndLoad(t *testing.T) {
 	equal(t, "Acceptance.StepsDir", cfg.Acceptance.StepsDir, "features/steps")
 	equal(t, "AcceptanceConfigured", cfg.AcceptanceConfigured(), true)
 	equalList(t, "Protect", cfg.Protect, []string{".eslintrc", "config/"})
-	// The four former options are ignored in the file; the fields hold the fixed values.
-	equal(t, "ShapeAudit", cfg.ShapeAudit, project.Audit{Enabled: false})
-	equal(t, "ShapeDecisionCheck", cfg.ShapeDecisionCheck, project.DecisionCheck{Enabled: false})
-	equal(t, "ReviewMaterial", cfg.ReviewMaterial, project.ReviewMaterial{Mode: "parts"})
-
-	var workers project.Workers = cfg.ShapeWorkers
-	equal(t, "ShapeWorkers.Enabled", workers.Enabled, false)
-	if workers.Roles == nil || !reflect.DeepEqual(workers.Roles, map[string]project.Role{}) {
-		t.Fatalf("ShapeWorkers.Roles = %#v, want an empty non-nil map", workers.Roles)
-	}
-
 	var shape project.Role = cfg.Models["shape"]
 	equal(t, "shape Provider", shape.Provider, "anthropic")
 	equal(t, "shape Model", shape.Model, "m")
@@ -225,7 +203,6 @@ func TestNamedCommandsOrder(t *testing.T) {
 // external-rounds and executor-claude-code: kogen-shaping shape/lineup_shape_test.go and
 // kogen-build build/lineup_test.go.
 func TestExecutorRoleLineup(t *testing.T) {
-	equal(t, "DefaultExternalRounds", project.DefaultExternalRounds, 6)
 	equal(t, "ExecutorClaudeCode", project.ExecutorClaudeCode, "claude-code")
 	equal(t, "ExecutorNative", project.ExecutorNative, "native")
 
@@ -233,7 +210,7 @@ func TestExecutorRoleLineup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := project.Role{Model: "m", Effort: "high", Executor: "claude-code", MaxRounds: 0}
+	want := project.Role{Model: "m", Effort: "high", Executor: "claude-code"}
 	if got := cfg.Models["shape"]; got != want || !got.External() {
 		t.Fatalf("shape = %+v (external %v), want %+v", got, got.External(), want)
 	}
@@ -242,8 +219,7 @@ func TestExecutorRoleLineup(t *testing.T) {
 	}
 
 	_, err = loadWithTeamModels(t, "models:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n")
-	e := wantSysError(t, err, "environment", "project_config_invalid", 3)
-	equalList(t, "lines", e.Lines, []string{"line 2: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
+	wantSysError(t, err, "environment", "project_config_invalid", 3)
 
 	// An explicit native role is the omitted one, and neither names an executor in its state.
 	omitted, err := loadWithTeamModels(t, "models:\n  review: {model: r, effort: high}\n")
@@ -264,8 +240,7 @@ func TestExecutorRoleLineup(t *testing.T) {
 	equal(t, "native role JSON", string(b), `{"Provider":"","Model":"r","Effort":"high"}`)
 
 	_, err = loadWithTeamModels(t, "models:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n")
-	e = wantSysError(t, err, "environment", "project_config_invalid", 3)
-	equalList(t, "lines", e.Lines, []string{"line 2: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"})
+	wantSysError(t, err, "environment", "project_config_invalid", 3)
 }
 
 // kogen cli/readiness/readiness.go reads what it can of an invalid file and lists the model
@@ -323,8 +298,6 @@ func TestTemplateAndRenderConfig(t *testing.T) {
 		t.Fatalf("%v\n%s", err, rendered)
 	}
 	equal(t, "rendered has no models block", strings.Contains(rendered, "models:"), false)
-	kept.ShapeWorkers.Roles = map[string]project.Role{}
-	kept.ReviewMaterial.Mode = "parts"
 	if !reflect.DeepEqual(back, kept) {
 		t.Fatalf("rendered configuration reads back as %+v, want %+v\n%s", back, kept, rendered)
 	}

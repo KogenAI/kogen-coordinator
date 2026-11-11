@@ -38,16 +38,15 @@ Each item is asserted so that changing it fails the suite.
 
 - `models-lineup`, `TestModelsLineup` and `TestModelsValidation`: the team and local paths (the one place model roles are written), defaults, whole-role overrides, source paths, file immutability and role validation.
 - `config-local-overlay`, `TestConfigLocalOverlay`, `TestModelsBaselineHash`: `LoadConfig` takes every model role from the models files only (the defaults, then `.kogen/models.yaml`, then `.kogen/local/models.yaml`, each role a file names replacing the whole role) and applies `project.LocalChecksPath` (`.kogen/local/checks.yaml`, per-name `Run` replacement in the committed names and order) over `.kogen/project.yaml`; a malformed local file is `environment/project_config_invalid` (exit 3) with its absolute path and `line N:` lines and no Config; no file is written; the local files stay outside the approval baseline and the team file joins it when present.
-- `config-path`, `TestConfigPathAndLoad`: `project.ConfigPath` is `.kogen/project.yaml` and `LoadConfig` reads the file written there; its roles come from `.kogen/models.yaml`. The removed `shape_workers`, `shape_audit`, `shape_decision_check` and `review_material` keys are ignored, and `ShapeWorkers`, `ShapeAudit`, `ShapeDecisionCheck` and `ReviewMaterial` hold the fixed values (workers off with an empty `Roles` map, audit off, decision check off, review material `parts`).
+- `config-path`, `TestConfigPathAndLoad`: `project.ConfigPath` is `.kogen/project.yaml` and `LoadConfig` reads the file written there; its roles come from `.kogen/models.yaml`. 
 - `config-models-refused`, `TestConfigRefusesModelsKey`: a root `models:` key in `.kogen/project.yaml` is refused by `LoadConfig` and `ParseConfig` as `environment/project_config_invalid` (exit 3) with the file and `line N: models is no longer read from .kogen/project.yaml; move the model lineup to .kogen/models.yaml`; `ReadableConfig` does not apply it, and `RenderConfig` and `Template` write no `models:` block.
 - `config-invalid-lines`, `TestConfigInvalidNamesTheLines`: an invalid file is `environment/project_config_invalid` (exit 3) with one `line N: ...` line per problem.
 - `config-not-initialized`, `TestConfigNotInitialized`: a root without the file is `environment/not_initialized` (exit 3).
 - `named-commands`, `TestNamedCommandsOrder`: `setup-N`, `fix-N`, the checks, then `acceptance`.
-- `external-rounds` and `executor-claude-code`, `TestExecutorRoleLineup`: `DefaultExternalRounds` is 6, `ExecutorClaudeCode` is `claude-code`, the executor of a role, zero `MaxRounds` for loaded roles, and rejection of the removed `max_rounds` setting.
+- `external-rounds` and `executor-claude-code`, `TestExecutorRoleLineup`: `ExecutorClaudeCode` is `claude-code` and the executor of a role.
 - `approval-path` and `approval-json`, `TestApprovalPathAndJSON`: the approval file's path and exact bytes, and its round trip.
 - `hash-line`, `TestHashIsTheDigestOfPathDigestLines`: the approval hash is recomputed with `crypto/sha256`.
 - `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns; `.kogen/models.yaml` is listed (right after `.kogen/project.yaml`) only when the project has it or a `protect` pattern lists it.
-- `baseline-former`, `TestFormerBaseline`: `project.FormerBaseline` returns a copy with `.kogen/models.yaml` inserted after `.kogen/project.yaml` when absent, the list the former always-listed rule produced, and never modifies its input.
 - `intent-paths`, `TestIntentPaths`: the paths under `.kogen/intents/<slug>`.
 - `build-edits`, `TestBuildEditsLeaveOutTheApprovedIntent`: `project.OwnedByIntent` (under `.kogen/intents/<slug>/` or `.kogen/models/<slug>/`, byte-exact prefix) and `project.BuildEdits`, a Build's edit list: the tree diff in order without the approved Intent's own paths.
 - `model-line` and `model-none`, `TestParseModelSpec`: the Model line.
@@ -161,7 +160,6 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.Approval.Slug` | kogen, kogen-shaping, kogen-build | `kogen/cli/buildprogram/helper_test.go`, `kogen-shaping/shape/approve.go` | `TestApprovalPathAndJSON`, `TestApprovalOfTheBaselineHash`, `TestResolveApproval` |
 | `project.Approval.SourceProvenance` | kogen-shaping, kogen-build | `kogen-shaping/shape/approve.go` | `TestApprovalPathAndJSON`, `TestResolveApproval` |
 | `project.ApprovalPath` | kogen, kogen-shaping, kogen-build | `kogen/cli/buildprogram/k_reviewretry_cli_test.go`, `kogen-shaping/shape/approve.go`, `kogen-build/build/blocker_test.go` | `TestApprovalPathAndJSON` |
-| `project.Audit.Enabled` | kogen-shaping | `kogen-shaping/shape/shape.go` | `TestConfigPathAndLoad` |
 | `project.Baseline` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen/cli/buildprogram/helper_test.go`, `kogen-verification/verify/readiness_test.go`, `kogen-shaping/shape/approve_test.go` | `TestBaselineOrderAndProtectGlobs`, `TestApprovalOfTheBaselineHash`, `TestWritePackageFacts`, `TestCaptureSourcePublishesTheVersionOneReceipt` |
 | `project.BindSource` | kogen-shaping | `kogen-shaping/shape/approve.go` | `TestCaptureSourcePublishesTheVersionOneReceipt`, `TestSourceCustodyAndMessages`, `TestPublishSourceKeepsThePredecessor` |
 | `project.CaptureOrigin` | kogen-shaping | `kogen-shaping/shape/refine_test.go` | `TestCaptureSourcePublishesTheVersionOneReceipt` |
@@ -184,15 +182,8 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.Config.NamedCommands` | kogen-verification | `kogen-verification/verify/readiness.go` | `TestNamedCommandsOrder` |
 | `project.Config.ProtectDiagnostics` / `project.ProtectDiagnostic` | config-check consumers | serialized loaded Config: advisory `Entry`, `Severity`, `Message`; refreshed by `Protected` | `TestProtectDiagnosticsContract` |
 | `project.Config.Protect` | kogen-shaping, kogen-build | `kogen-shaping/shape/init.go` | `TestBaselineOrderAndProtectGlobs`, `TestConfigPathAndLoad`, `TestReadableConfigAndModelRoles`, `TestTemplateAndRenderConfig` |
-| `project.Config.ReviewMaterial` | kogen-build | `kogen-build/build/k_revod_gate_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.Config.Setup` | kogen-verification, kogen-shaping, kogen-build | `kogen-verification/verify/run.go`, `kogen-shaping/shape/init.go` | `TestConfigPathAndLoad`, `TestNamedCommandsOrder`, `TestTemplateAndRenderConfig` |
-| `project.Config.ShapeAudit` | kogen-shaping | `kogen-shaping/shape/shape.go` | `TestConfigPathAndLoad` |
-| `project.Config.ShapeDecisionCheck` | kogen-shaping | `kogen-shaping/shape/decision_test.go` | `TestConfigPathAndLoad` |
-| `project.Config.ShapeWorkers` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/lineup_test.go`, `kogen-build/build/legacy_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.ConfigPath` | kogen, kogen-shaping, kogen-build | `kogen/cli/repository_config_test.go`, `kogen-shaping/shape/init.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
-| `project.DecisionCheck` | kogen-shaping | `kogen-shaping/shape/decision_test.go` | `TestConfigPathAndLoad` |
-| `project.DecisionCheck.Enabled` | kogen-shaping | `kogen-shaping/shape/decision_test.go` | `TestConfigPathAndLoad` |
-| `project.DefaultExternalRounds` | kogen-shaping, kogen-build | `kogen-shaping/shape/external.go`, `kogen-build/build/executor_external.go` | `TestExecutorRoleLineup` |
 | `project.DefaultModels` | kogen-shaping, kogen-build | `kogen-shaping/shape/init.go` | `TestConfigPathAndLoad`, `TestReadableConfigAndModelRoles`, `TestTemplateAndRenderConfig` |
 | `project.Detect` | kogen-shaping | `kogen-shaping/shape/init.go` | `TestDetectAndAcceptanceCommand` |
 | `project.Detected` | kogen-shaping | `kogen-shaping/shape/init.go` | `TestDetectAndAcceptanceCommand` |
@@ -205,7 +196,6 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.EncodeJSON` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/context_test.go`, `kogen-build/build/unit_test.go` | `TestEncodeJSON`, `TestWritePackageFacts` |
 | `project.ExecutorClaudeCode` | kogen | `kogen/cli/executor_wiring_test.go` | `TestExecutorRoleLineup` |
 | `project.FeaturePath` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen-build/build/helper_test.go`, `kogen-build/build/builder.go` | `TestIntentPaths`, `TestIntentFields`, `TestCheckIntent` |
-| `project.FormerBaseline` | kogen-build, kogen-verification | paired consumer rows b-consumes-baseline-optional-models and v-consumes-baseline-optional-models | `TestFormerBaseline` |
 | `project.Hash` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen/cli/buildprogram/helper_test.go`, `kogen-verification/verify/readiness_test.go`, `kogen-shaping/shape/approve_test.go` | `TestHashIsTheDigestOfPathDigestLines`, `TestApprovalOfTheBaselineHash`, `TestWritePackageFacts`, `TestCaptureSourcePublishesTheVersionOneReceipt` |
 | `project.Intent` | kogen-verification, kogen-shaping, kogen-build | `kogen-verification/contract/contract_test.go`, `kogen-shaping/shape/approve_test.go`, `kogen-build/build/material_test.go` | `TestIntentFields` |
 | `project.Intent.Acceptance` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/window.go` | `TestIntentFields` |
@@ -255,14 +245,11 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.RequireIntentDir` | kogen-shaping, kogen-build | `kogen-shaping/shape/approve.go`, `kogen-build/build/build.go` | `TestIntentExistsAndRequireIntentDir` |
 | `project.ResolveApproval` | kogen-shaping | `kogen-shaping/shape/approve.go` | `TestResolveApproval` |
 | `project.RestoreSource` | kogen-shaping | `kogen-shaping/shape/approve.go`, `kogen-shaping/shape/refine.go` | `TestSourceRefreshRefineAndRestore` |
-| `project.ReviewMaterial` | kogen-build | `kogen-build/build/k_revod_gate_test.go` | `TestConfigPathAndLoad` |
-| `project.ReviewMaterial.Mode` | kogen-build | `kogen-build/build/k_revod_gate_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.Role` | kogen, kogen-shaping, kogen-build | `kogen-shaping/shape/lineup_shape_test.go`, `kogen-build/build/lineup_test.go` | `TestConfigPathAndLoad`, `TestExecutorRoleLineup`, `TestTemplateAndRenderConfig` |
 | `project.Role.BaseURL` | kogen-shaping, kogen-build | `kogen-shaping/shape/common.go`, `kogen-build/build/util.go` | `TestConfigPathAndLoad` |
 | `project.Role.Effort` | kogen, kogen-shaping, kogen-build | `kogen/cli/executor_wiring_test.go`, `kogen-shaping/shape/evidence_test.go`, `kogen-build/build/cache_id_test.go` | `TestConfigPathAndLoad`, `TestExecutorRoleLineup` |
 | `project.Role.Executor` | kogen, kogen-shaping, kogen-build | `kogen/cli/executor_wiring_test.go`, `kogen-shaping/shape/common.go`, `kogen-build/build/executor_external.go` | `TestExecutorRoleLineup` |
 | `project.Role.External` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/common.go`, `kogen-build/build/build.go` | `TestConfigPathAndLoad`, `TestExecutorRoleLineup` |
-| `project.Role.MaxRounds` | kogen-shaping, kogen-build | `kogen-shaping/shape/external.go`, `kogen-build/build/executor_external.go` | `TestExecutorRoleLineup` |
 | `project.Role.Model` | kogen, kogen-shaping, kogen-build | `kogen/cli/executor_wiring_test.go`, `kogen-shaping/shape/evidence_test.go`, `kogen-build/build/cache_id_test.go` | `TestConfigPathAndLoad`, `TestExecutorRoleLineup`, `TestReadableConfigAndModelRoles` |
 | `project.Role.Provider` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/common.go`, `kogen-build/build/cache_id_test.go` | `TestConfigPathAndLoad` |
 | `project.Runner` | kogen-verification | `kogen-verification/verify/real_test.go` | `TestDetectAndAcceptanceCommand` |
@@ -305,9 +292,6 @@ Every exported member of `project`, `git` and `durable` that a consumer uses has
 | `project.Step.Text` | kogen, kogen-verification, kogen-shaping, kogen-build | `kogen/cli/approve_deadline_test.go`, `kogen-verification/verify/report.go` | `TestParseGherkinOutlineRowsAndBackground` |
 | `project.Template` | kogen-shaping, kogen-build | `kogen-shaping/shape/init.go`, `kogen-build/build/facts_test.go` | `TestTemplateAndRenderConfig` |
 | `project.ValidateSource` | kogen-shaping, kogen-build | `kogen-shaping/shape/approve.go`, `kogen-shaping/shape/refine.go` | `TestSourceCustodyAndMessages`, `TestSourceRefreshRefineAndRestore` |
-| `project.Workers` | kogen-build | `kogen-build/build/legacy.go` | `TestConfigPathAndLoad` |
-| `project.Workers.Enabled` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/lineup_test.go`, `kogen-build/build/legacy_test.go` | `TestConfigPathAndLoad` |
-| `project.Workers.Roles` | kogen, kogen-shaping, kogen-build | `kogen/cli/readiness/readiness.go`, `kogen-shaping/shape/batch.go`, `kogen-build/build/legacy_test.go` | `TestConfigPathAndLoad`, `TestTemplateAndRenderConfig` |
 | `project.WriteApproval` | kogen, kogen-build | `kogen/cli/buildprogram/helper_test.go` | `TestApprovalPathAndJSON`, `TestApprovalOfTheBaselineHash` |
 | `project.WritePackageFacts` | kogen-verification, kogen-shaping, kogen-build | `kogen-shaping/shape/approve.go`, `kogen-build/build/facts.go` | `TestWritePackageFacts` |
 | `route.Steps`, `route.Cycle`, `route.Resume`, `route.Stage*` | kogen-build, kogen-review (the review stages) | `kogen-build/build/route.go`, `kogen-build/build/builder.go`, `kogen-review/review/independent.go` | `TestRouteCycleAndResume` |

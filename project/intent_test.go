@@ -630,25 +630,6 @@ func TestBaselineListsTeamModelsOnlyWhenPresent(t *testing.T) {
 	}
 }
 
-func TestFormerBaseline(t *testing.T) {
-	in := []string{"a", ConfigPath, "b"}
-	got := FormerBaseline(in)
-	if want := []string{"a", ConfigPath, ModelsPath, "b"}; !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-	if !slices.Equal(in, []string{"a", ConfigPath, "b"}) {
-		t.Errorf("input modified: %v", in)
-	}
-	has := []string{ConfigPath, "x", ModelsPath}
-	if got := FormerBaseline(has); !slices.Equal(got, has) || &got[0] == &has[0] {
-		t.Errorf("list with the team path: got %v", got)
-	}
-	none := []string{"a"}
-	if got := FormerBaseline(none); !slices.Equal(got, none) {
-		t.Errorf("list without the configuration: got %v", got)
-	}
-}
-
 func TestBaselineUnreadableIntentSubfolderFails(t *testing.T) {
 	root := gitRepo(t)
 	slug := "demo"

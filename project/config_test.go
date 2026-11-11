@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -368,49 +369,14 @@ func TestModelsFileRules(t *testing.T) {
 	}
 }
 
-func TestParseConfigRemovedOptionsAreIgnored(t *testing.T) {
-	// shape_workers, shape_audit, shape_decision_check and review_material were removed: the
-	// keys are read and ignored, whatever their value, and Config holds the fixed defaults.
-	for name, text := range map[string]string{
-		"non-default values": `version: 1
-shape_workers:
-  enabled: true
-  read: {model: a, effort: b}
-  probe: {model: a, effort: b, provider: chatgpt}
-  draft: {model: grok-4.7, effort: low, provider: supergrok}
-shape_audit:
-  enabled: true
-shape_decision_check:
-  enabled: true
-review_material:
-  mode: on_demand
-`,
-		"malformed values": `version: 1
-shape_workers: x
-shape_audit:
-  enabled: 'true'
-shape_decision_check:
-  extra: 1
-review_material:
-  mode: sometimes
-`,
-		"absent": "version: 1\n",
-	} {
-		cfg := mustParse(t, text)
-		if want := (Workers{Enabled: false, Roles: map[string]Role{}}); !reflect.DeepEqual(cfg.ShapeWorkers, want) {
-			t.Errorf("%s: ShapeWorkers %#v", name, cfg.ShapeWorkers)
-		}
-		if cfg.ShapeAudit != (Audit{Enabled: false}) {
-			t.Errorf("%s: ShapeAudit %+v", name, cfg.ShapeAudit)
-		}
-		if cfg.ShapeDecisionCheck != (DecisionCheck{Enabled: false}) {
-			t.Errorf("%s: ShapeDecisionCheck %+v", name, cfg.ShapeDecisionCheck)
-		}
-		if cfg.ReviewMaterial != (ReviewMaterial{Mode: "parts"}) {
-			t.Errorf("%s: ReviewMaterial %+v", name, cfg.ReviewMaterial)
-		}
-		if len(cfg.Models) != 3 {
-			t.Errorf("%s: models %+v", name, cfg.Models)
+func TestParseConfigRefusesRemovedOptions(t *testing.T) {
+	// shape_workers, shape_audit, shape_decision_check and review_material were removed: they
+	// are unknown keys like any other.
+	for _, key := range []string{"shape_workers", "shape_audit", "shape_decision_check", "review_material"} {
+		_, err := ParseConfig("version: 1\n"+key+":\n  enabled: true\n", "p")
+		var se *sys.Error
+		if !errors.As(err, &se) || !slices.Equal(se.Lines, []string{"line 2: unknown key " + key}) {
+			t.Errorf("%s: %v", key, err)
 		}
 	}
 }
@@ -496,7 +462,7 @@ func TestLoadConfigLocalFileOverTeamFile(t *testing.T) {
 func TestLoadConfigMalformedTeamFile(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ConfigPath, "version: 1\n")
-	writeFile(t, root, ModelsPath, "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: high\n    max_rounds: 3\n")
+	writeFile(t, root, ModelsPath, "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: high\n    bogus: 3\n")
 	// The local files come after the team file: their problems are not reported first.
 	writeFile(t, root, LocalModelsPath, "models: [x\n")
 	writeFile(t, root, LocalChecksPath, "checks: [x\n")
@@ -504,7 +470,7 @@ func TestLoadConfigMalformedTeamFile(t *testing.T) {
 	se, ok := sys.AsError(err)
 	if !ok || cfg != nil || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
 		se.Detail != filepath.Join(root, ModelsPath) ||
-		!slices.Equal(se.Lines, []string{"line 6: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"}) {
+		!slices.Equal(se.Lines, []string{"line 2: models.build with executor claude-code must be {model, effort} non-blank strings"}) {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 	// The project file's errors come before the team file's.
@@ -705,25 +671,6 @@ func TestBuildExecutorSelection(t *testing.T) {
 	}
 }
 
-func TestRemovedMaxRounds(t *testing.T) {
-	for _, tc := range []struct{ role, options string }{
-		{"shape", "executor: claude-code, max_rounds: 3"},
-		{"build", "executor: claude-code, max_rounds: 3"},
-		{"review", "executor: claude-code, max_rounds: 3"},
-		{"build", "executor: native, max_rounds: 2"},
-		{"build", "max_rounds: 0"},
-		{"build", "max_rounds: nonsense"},
-	} {
-		t.Run(tc.role+tc.options, func(t *testing.T) {
-			se := modelsError(t, "models:\n  "+tc.role+": {"+tc.options+"}\n")
-			want := "line 2: models." + tc.role + ".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"
-			if !slices.Equal(se.Lines, []string{want}) || !strings.HasSuffix(se.Detail, ModelsPath) {
-				t.Fatalf("%+v", se)
-			}
-		})
-	}
-}
-
 func TestBuildExecutorConfigurationErrors(t *testing.T) {
 	const head = "models:\n  "
 	for _, tt := range []struct{ name, text, want string }{
@@ -753,8 +700,8 @@ func TestBuildExecutorConfigurationErrors(t *testing.T) {
 // TestClaudeLineupRoleConfiguration: shape, build and review select native or claude-code
 // independently, with model and effort passed through.
 func TestClaudeLineupRoleConfiguration(t *testing.T) {
-	ext := func(rounds int) Role {
-		return Role{Model: "claude-opus-5-5", Effort: "xhigh", Executor: "claude-code", MaxRounds: rounds}
+	ext := func() Role {
+		return Role{Model: "claude-opus-5-5", Effort: "xhigh", Executor: "claude-code"}
 	}
 	roles := []string{"shape", "build", "review"}
 	// Every subset of roles may be external; the others keep their native configuration.
@@ -766,7 +713,7 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 			switch {
 			case mask&(1<<i) != 0:
 				text.WriteString("  " + r + ": {executor: claude-code, model: claude-opus-5-5, effort: xhigh}\n")
-				want[r] = ext(0)
+				want[r] = ext()
 			case i == 1:
 				text.WriteString("  " + r + ": {executor: native, model: gpt-6.1-sol, effort: medium}\n")
 				want[r] = Role{Model: "gpt-6.1-sol", Effort: "medium"}
@@ -781,9 +728,6 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 				t.Fatalf("mask %d: %s External() wrong", mask, r)
 			}
 		}
-	}
-	if DefaultExternalRounds != 6 {
-		t.Fatalf("default rounds %d", DefaultExternalRounds)
 	}
 	for _, r := range roles {
 		se := modelsError(t, "models:\n  "+r+": {executor: claude-code, base_url: 'http://x/v1', model: m, effort: e}\n")
@@ -809,8 +753,8 @@ func TestNativeRoleJSONKeepsItsBytes(t *testing.T) {
 	if err != nil || string(b) != `{"Provider":"chatgpt","Model":"m","Effort":"e"}` {
 		t.Fatalf("%s %v", b, err)
 	}
-	b, _ = json.Marshal(Role{Model: "m", Effort: "e", Executor: "claude-code", MaxRounds: 4})
-	if string(b) != `{"Provider":"","Model":"m","Effort":"e","Executor":"claude-code","MaxRounds":4}` {
+	b, _ = json.Marshal(Role{Model: "m", Effort: "e", Executor: "claude-code"})
+	if string(b) != `{"Provider":"","Model":"m","Effort":"e","Executor":"claude-code"}` {
 		t.Fatalf("%s", b)
 	}
 }
@@ -959,8 +903,6 @@ func TestLoadConfigMalformedLocalFile(t *testing.T) {
 		name, models, checks, path string
 		lines                      []string
 	}{
-		{"max_rounds", "models:\n  build:\n    executor: claude-code\n    model: m\n    effort: high\n    max_rounds: 6\n", "", LocalModelsPath,
-			[]string{"line 6: models.build.max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none"}},
 		{"plan role", "models:\n  plan: {model: m, effort: high}\n", "", LocalModelsPath, []string{"line 2: unknown key plan"}},
 		{"models yaml", "models:\n  build: [m\n", "", LocalModelsPath, []string{"line 2: unclosed ["}},
 		{"models root", "- a\n", "", LocalModelsPath, []string{"line 1: the file must be a mapping"}},
@@ -999,7 +941,7 @@ func TestLoadConfigMalformedLocalFile(t *testing.T) {
 func TestLoadConfigCommittedErrorsComeBeforeLocalFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ConfigPath, "version: 1\ncommands:\n  acceptance:\n    run: true\n")
-	writeFile(t, root, LocalModelsPath, "models: {build: {model: m, effort: high, max_rounds: 6}}\n")
+	writeFile(t, root, LocalModelsPath, "models: {build: {model: m, effort: high}}\n")
 	writeFile(t, root, LocalChecksPath, "checks: [x\n")
 	_, err := LoadConfig(root)
 	se, ok := sys.AsError(err)

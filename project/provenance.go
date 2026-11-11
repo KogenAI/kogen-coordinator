@@ -646,7 +646,7 @@ func sha256Hex(b []byte) string {
 func configDigest(cfg *Config) string {
 	var e etf
 	e.WriteByte(131)
-	e.mapHeader(9)
+	e.mapHeader(8)
 	e.atom("setup")
 	e.stringList(cfg.Setup)
 	e.atom("__struct__")
@@ -679,14 +679,6 @@ func configDigest(cfg *Config) string {
 	e.optionalBinary(run)
 	e.atom("steps_dir")
 	e.optionalBinary(steps)
-	e.atom("shape_workers")
-	e.mapHeader(1 + len(cfg.ShapeWorkers.Roles))
-	e.atom("enabled")
-	e.atom(strconv.FormatBool(cfg.ShapeWorkers.Enabled))
-	for _, name := range sortedKeys(cfg.ShapeWorkers.Roles) {
-		e.binary(name)
-		e.role(cfg.ShapeWorkers.Roles[name])
-	}
 	sum := sha256.Sum256(e.Bytes())
 	return hex.EncodeToString(sum[:])
 }

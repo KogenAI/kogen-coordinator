@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -67,9 +66,6 @@ func TestModelsValidation(t *testing.T) {
 				writeFile(t, root, path, body)
 				_, err := project.LoadModels(root)
 				e := wantSysError(t, err, "environment", "project_config_invalid", 3)
-				if strings.Contains(body, "max_rounds") && (len(e.Lines) != 1 || !strings.Contains(e.Lines[0], "max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none")) {
-					t.Fatalf("removed key: %+v", e)
-				}
 				if !strings.Contains(e.Detail, path) || len(e.Lines) == 0 || !strings.HasPrefix(e.Lines[0], "line ") {
 					t.Fatalf("error: %+v", e)
 				}
@@ -102,20 +98,4 @@ func TestModelsBaselineHash(t *testing.T) {
 	if project.Hash(root, paths) == before {
 		t.Fatal("team file did not change approval")
 	}
-}
-
-// FormerBaseline is the list the former always-listed rule produced: a consumer recognizes a
-// checkpoint or approval saved under it while the team file was absent.
-func TestFormerBaseline(t *testing.T) {
-	root := t.TempDir()
-	current := must(project.Baseline(root, "missing", &project.Config{}))
-	input := slices.Clone(current)
-	former := project.FormerBaseline(current)
-	equalList(t, "former", former, []string{project.ConfigPath, project.ModelsPath})
-	equalList(t, "input", current, input)
-	if project.Hash(root, former) == project.Hash(root, current) {
-		t.Fatal("the former list hashes like the current one")
-	}
-	equalList(t, "with the team file", project.FormerBaseline(former), former)
-	equalList(t, "without the configuration", project.FormerBaseline([]string{"a"}), []string{"a"})
 }

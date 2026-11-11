@@ -29,17 +29,12 @@ const LocalChecksPath = ".kogen/local/checks.yaml"
 // omitted from JSON when empty so existing checkpoints keep their bytes.
 //
 // Executor is "" for the native role (including `executor: native`) or "claude-code".
-// MaxRounds remains available to consumers but is zero for loaded roles. Both fields
-// are omitted from JSON when empty so existing checkpoints keep their bytes.
+// Both are omitted from JSON when empty so existing checkpoints keep their bytes.
 type Role struct {
 	Provider, Model, Effort string
 	BaseURL                 string `json:",omitempty"`
 	Executor                string `json:",omitempty"`
-	MaxRounds               int    `json:",omitempty"`
 }
-
-// DefaultExternalRounds caps a review role when its external executor supplies no round limit.
-const DefaultExternalRounds = 6
 
 // Executor names a role may select (the native one is the empty Executor).
 const (
@@ -58,29 +53,6 @@ type Check struct{ Name, Run string }
 // (`commands.acceptance`). Either may be empty while it is not configured.
 type Acceptance struct{ Run, StepsDir string }
 
-// Workers was `shape_workers`: whether the shaper may use workers and their roles
-// ("read", "probe", "draft"). The YAML option was removed; Config.ShapeWorkers always holds
-// Workers{Enabled: false, Roles: map[string]Role{}}.
-type Workers struct {
-	Enabled bool
-	Roles   map[string]Role
-}
-
-// Audit was `shape_audit`: whether Shape audits the request before its conversation. The YAML
-// option was removed; Config.ShapeAudit always holds Audit{Enabled: false}.
-type Audit struct{ Enabled bool }
-
-// DecisionCheck was `shape_decision_check`: whether Shape checks each candidate's stated
-// Decisions against the request. The YAML option was removed; Config.ShapeDecisionCheck always
-// holds DecisionCheck{Enabled: false}.
-type DecisionCheck struct{ Enabled bool }
-
-// ReviewMaterial was `review_material`: how a review that overflows its window reads the
-// pinned source, `parts` (every part must be read) or `on_demand` (a manifest; every part covering
-// a changed hunk must be read, others by id as needed). The YAML option was removed;
-// Config.ReviewMaterial always holds ReviewMaterial{Mode: "parts"}.
-type ReviewMaterial struct{ Mode string }
-
 // Config is a validated `.kogen/project.yaml` (SET-8). Its Models come from the models files
 // (ModelsPath, LocalModelsPath), never from `.kogen/project.yaml`.
 type Config struct {
@@ -90,10 +62,6 @@ type Config struct {
 	Protect            []string
 	ProtectDiagnostics []ProtectDiagnostic
 	Models             map[string]Role // "shape", "build", "review"; set by LoadConfig from the models files, defaults where they say nothing
-	ShapeWorkers       Workers
-	ShapeAudit         Audit
-	ShapeDecisionCheck DecisionCheck
-	ReviewMaterial     ReviewMaterial
 }
 
 // ProtectDiagnostic describes an advisory finding for a protect entry.
@@ -333,7 +301,7 @@ func validateConfig(node *yamlNode) (*Config, []problem) {
 		return nil, []problem{{node.line, "the file must be a mapping"}}
 	}
 	v := &validator{}
-	c := &Config{Models: DefaultModels(), ShapeWorkers: Workers{Roles: map[string]Role{}}, ReviewMaterial: ReviewMaterial{Mode: "parts"}}
+	c := &Config{Models: DefaultModels()}
 	for _, p := range node.pairs {
 		switch p.key {
 		case "version":
@@ -344,9 +312,6 @@ func validateConfig(node *yamlNode) (*Config, []problem) {
 			v.commands(p.node, c)
 		case "protect":
 			c.Protect = v.strings(p.node, "protect")
-		case "shape_workers", "shape_audit", "shape_decision_check", "review_material":
-			// Older project files may retain these removed options. They are ignored: the
-			// configuration always holds their fixed defaults.
 		case "models":
 			// The lineup lives only in the models files; its contents are not read.
 			v.add(p.line, "models is no longer read from "+ConfigPath+"; move the model lineup to "+ModelsPath)
@@ -494,7 +459,7 @@ func (v *validator) models(node *yamlNode) map[string]Role {
 	return roles
 }
 
-// executorKeys separates executor from a role mapping and rejects the removed round setting.
+// executorKeys separates executor from a role mapping.
 func (v *validator) executorKeys(p yamlPair) (rest *yamlNode, exec string, ok bool) {
 	rest = p.node
 	if p.node.kind != kindMap {
@@ -506,17 +471,13 @@ func (v *validator) executorKeys(p yamlPair) (rest *yamlNode, exec string, ok bo
 	path := "models." + p.key
 	for i := range p.node.pairs {
 		pair := &p.node.pairs[i]
-		switch pair.key {
-		case "executor":
+		if pair.key == "executor" {
 			execPair = pair
-		case "max_rounds":
-			v.add(pair.line, path+".max_rounds was removed; the external executor's own round limit caps a role, and 6 caps a review role whose executor supplies none")
-			ok = false
-		default:
+		} else {
 			kept = append(kept, *pair)
 		}
 	}
-	if execPair == nil && ok {
+	if execPair == nil {
 		return rest, "", true
 	}
 	copied := *p.node
@@ -699,5 +660,5 @@ func ReadableConfig(text string) *Config {
 			return cfg
 		}
 	}
-	return &Config{Models: DefaultModels(), ShapeWorkers: Workers{Roles: map[string]Role{}}}
+	return &Config{Models: DefaultModels()}
 }
