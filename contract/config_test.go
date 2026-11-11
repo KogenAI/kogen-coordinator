@@ -237,7 +237,7 @@ func TestExecutorRoleLineup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "native role JSON", string(b), `{"Provider":"","Model":"r","Effort":"high"}`)
+	equal(t, "native role JSON", string(b), `{"Provider":"chatgpt","Model":"r","Effort":"high"}`)
 
 	_, err = loadWithTeamModels(t, "models:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n")
 	wantSysError(t, err, "environment", "project_config_invalid", 3)

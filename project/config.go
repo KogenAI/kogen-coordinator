@@ -24,7 +24,12 @@ const ConfigPath = ".kogen/project.yaml"
 // LocalChecksPath is the optional host-local check commands, relative to the repository root.
 const LocalChecksPath = ".kogen/local/checks.yaml"
 
-// Role is one model selection. Provider "" means the role names no provider (legacy ChatGPT).
+// DefaultProvider is the provider a role without a provider key uses: what an empty provider
+// used to mean, now named because kogen-loop rejects an empty one.
+const DefaultProvider = "chatgpt"
+
+// Role is one model selection. Provider is never empty for a native role; only an external
+// executor's role names none.
 // BaseURL is set only for the openai-compatible provider (the host's /v1 base); it is
 // omitted from JSON when empty so existing checkpoints keep their bytes.
 //
@@ -75,9 +80,9 @@ var ModelRoles = [...]string{"shape", "build", "review"}
 // DefaultModels returns the per-role defaults (SET-8); the template is derived from it.
 func DefaultModels() map[string]Role {
 	return map[string]Role{
-		"shape":  {Model: "gpt-6.1-sol", Effort: "high"},
-		"build":  {Model: "gpt-6.1-sol", Effort: "medium"},
-		"review": {Model: "gpt-6.1-terra", Effort: "medium"},
+		"shape":  {Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "high"},
+		"build":  {Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "medium"},
+		"review": {Provider: DefaultProvider, Model: "gpt-6.1-terra", Effort: "medium"},
 	}
 }
 
@@ -602,7 +607,7 @@ func (v *validator) roleConfig(kv []yamlPair, path string, line int, model, effo
 	if !v.checkEffort(kv, path, line, provider, effort) {
 		return Role{}, false
 	}
-	r := Role{Model: model, Effort: effort}
+	r := Role{Provider: DefaultProvider, Model: model, Effort: effort}
 	if present {
 		r.Provider = provider
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KogenAI/kogen-loop/provider"
 	"github.com/KogenAI/kogen-loop/sys"
 )
 
@@ -136,9 +137,9 @@ protect: []          # check configuration the Build must not change, e.g. .cred
 		t.Error("the template has a models block")
 	}
 	wantDefaults := map[string]Role{
-		"shape":  {Model: "gpt-6.1-sol", Effort: "high"},
-		"build":  {Model: "gpt-6.1-sol", Effort: "medium"},
-		"review": {Model: "gpt-6.1-terra", Effort: "medium"},
+		"shape":  {Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "high"},
+		"build":  {Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "medium"},
+		"review": {Provider: DefaultProvider, Model: "gpt-6.1-terra", Effort: "medium"},
 	}
 	if !maps.Equal(DefaultModels(), wantDefaults) {
 		t.Errorf("DefaultModels = %+v, want %+v", DefaultModels(), wantDefaults)
@@ -506,7 +507,7 @@ func TestParseConfigOldConfig(t *testing.T) {
 }
 
 func TestProviderSelections(t *testing.T) {
-	// ExUnit: provider selections preserve omission and validate every role and effort
+	// ExUnit: provider selections default an omitted provider and validate every role and effort
 	const section = "models"
 	for _, role := range []string{"shape", "build", "review"} {
 		parse := func(fields string) (Role, *sys.Error) {
@@ -518,7 +519,7 @@ func TestProviderSelections(t *testing.T) {
 			}
 			return cfg.Models[role], nil
 		}
-		if r, _ := parse("model: fixture, effort: arbitrary"); r != (Role{Model: "fixture", Effort: "arbitrary"}) {
+		if r, _ := parse("model: fixture, effort: arbitrary"); r != (Role{Provider: DefaultProvider, Model: "fixture", Effort: "arbitrary"}) {
 			t.Errorf("%s.%s without provider: %+v", section, role, r)
 		}
 		if r, _ := parse("model: fixture, effort: arbitrary, provider: chatgpt"); r != (Role{Provider: "chatgpt", Model: "fixture", Effort: "arbitrary"}) {
@@ -645,10 +646,10 @@ func TestBuildExecutorSelection(t *testing.T) {
 		{"quoted executor name", `{executor: "claude-code", model: m, effort: low}`, Role{Model: "m", Effort: "low", Executor: "claude-code"}},
 		// Written out, the native executor is the native builder: no value differs from a file
 		// that says nothing, so checkpoints keep their bytes.
-		{"native written out", "{executor: native, model: gpt-6.1-sol, effort: medium}", Role{Model: "gpt-6.1-sol", Effort: "medium"}},
+		{"native written out", "{executor: native, model: gpt-6.1-sol, effort: medium}", Role{Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "medium"}},
 		{"native keeps its provider", "{executor: native, provider: supergrok, model: grok-4.7, effort: low}",
 			Role{Provider: "supergrok", Model: "grok-4.7", Effort: "low"}},
-		{"no executor", "{model: gpt-6.1-sol, effort: medium}", Role{Model: "gpt-6.1-sol", Effort: "medium"}},
+		{"no executor", "{model: gpt-6.1-sol, effort: medium}", Role{Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "medium"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := modelsConfig(t, "models:\n  build: "+tt.build+"\n")
@@ -716,7 +717,7 @@ func TestClaudeLineupRoleConfiguration(t *testing.T) {
 				want[r] = ext()
 			case i == 1:
 				text.WriteString("  " + r + ": {executor: native, model: gpt-6.1-sol, effort: medium}\n")
-				want[r] = Role{Model: "gpt-6.1-sol", Effort: "medium"}
+				want[r] = Role{Provider: DefaultProvider, Model: "gpt-6.1-sol", Effort: "medium"}
 			}
 		}
 		cfg := modelsConfig(t, text.String())
@@ -965,5 +966,15 @@ func TestLoadConfigUnreadableLocalFile(t *testing.T) {
 	if !ok || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Exit != 3 ||
 		!strings.HasPrefix(se.Detail, "read "+filepath.Join(root, LocalChecksPath)+": ") || len(se.Lines) != 0 {
 		t.Fatalf("got %+v", err)
+	}
+}
+
+func TestDefaultModelsNameAProviderKogenLoopAccepts(t *testing.T) {
+	for role, r := range DefaultModels() {
+		if r.Provider == "" {
+			t.Errorf("DefaultModels[%q] has an empty provider", role)
+		} else if _, ok := provider.Lookup(r.Provider); !ok {
+			t.Errorf("DefaultModels[%q] provider %q is unknown to kogen-loop", role, r.Provider)
+		}
 	}
 }
