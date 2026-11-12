@@ -407,6 +407,32 @@ func TestLoadConfigNotInitialized(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUnreadableIsNamed(t *testing.T) {
+	cases := map[string]struct {
+		setup func(root, file string)
+		cause string
+	}{
+		"directory": {func(_, file string) { _ = os.MkdirAll(file, 0o755) }, "is a directory"},
+		"dangling": {func(root, file string) {
+			_ = os.MkdirAll(filepath.Dir(file), 0o755)
+			_ = os.Symlink(filepath.Join(root, "missing"), file)
+		}, "no such file or directory"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			file := filepath.Join(root, ConfigPath)
+			c.setup(root, file)
+			_, err := LoadConfig(root)
+			se, ok := sys.AsError(err)
+			if !ok || se.Class != "environment" || se.Reason != "project_config_unreadable" || se.Exit != 3 ||
+				se.Detail != "read "+file+": "+c.cause {
+				t.Fatalf("got %+v", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigReadsTheTemplate(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ConfigPath, Template())

@@ -6,7 +6,9 @@
 package project
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -116,14 +118,23 @@ func (c *Config) NamedCommands() []NamedCommand {
 // model role from the models files: the defaults, then the team file ModelsPath, then the
 // host-local LocalModelsPath, each role a file names replacing the whole role. It then applies
 // the host-local check commands (LocalChecksPath). Files are read in that precedence order and the
-// first failure is the only one reported: errors are environment/not_initialized,
+// first failure is the only one reported: errors are environment/not_initialized (the file is
+// absent), environment/project_config_unreadable (it exists but cannot be read),
 // environment/old_kogen_config and environment/project_config_invalid. A models file or local
 // checks file that does not exist is skipped; none is ever written.
 func LoadConfig(root string) (*Config, error) {
 	file := filepath.Join(root, ConfigPath)
+	if _, err := os.Lstat(file); err != nil && os.IsNotExist(err) {
+		return nil, sys.Fail("environment", "not_initialized", root+" has no .kogen/project.yaml; run kogen init", 3)
+	}
 	b, err := os.ReadFile(file)
 	if err != nil {
-		return nil, sys.Fail("environment", "not_initialized", root+" has no .kogen/project.yaml; run kogen init", 3)
+		cause := err
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			cause = pe.Err
+		}
+		return nil, sys.Fail("environment", "project_config_unreadable", fmt.Sprintf("read %s: %v", file, cause), 3)
 	}
 	cfg, err := ParseConfig(string(b), file)
 	if err != nil {

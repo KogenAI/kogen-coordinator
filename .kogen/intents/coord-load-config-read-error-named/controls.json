@@ -1,0 +1,1 @@
+{"deferred":"The correct change is a few lines in project/config.go; the Build writes it and the acceptance scenarios run it against the real LoadConfig."}

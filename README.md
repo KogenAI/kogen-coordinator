@@ -69,6 +69,10 @@ files the roles are the team file's over the defaults; without the team file the
   committed file's errors come first, then the first failing of the team models file, the local
   models file and the local checks file, in that order; an unreadable team file is reported like an
   unreadable local file, with detail `read <root>/.kogen/models.yaml: <error>`; no Config is returned, so a Build stops before any model call.
+- An absent `.kogen/project.yaml` is `environment/not_initialized` (exit 3, "run kogen init"). Any
+  other failure to read it (permission denied, a directory, a dangling symbolic link, an I/O error)
+  is `environment/project_config_unreadable` (exit 3) with detail
+  `read <root>/.kogen/project.yaml: <operating-system error>`.
 - The local files are not in the approval baseline, so changing them never changes an approval
   hash. Neither they nor the committed configuration are ever written.
 
