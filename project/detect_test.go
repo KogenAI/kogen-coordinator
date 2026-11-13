@@ -272,6 +272,54 @@ func TestDetectCargo(t *testing.T) {
 	}
 }
 
+func TestDetectPython(t *testing.T) {
+	test := Check{"python-test", "pytest"}
+	lint := Check{"python-lint", "python -m ruff check ."}
+	editable := []string{"python -m pip install -e ."}
+	reqSetup := []string{"python -m pip install -r requirements.txt"}
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"pyproject with pytest", map[string]string{"pyproject.toml": "[tool.pytest.ini_options]"}, []string{"pyproject.toml"}, Detected{Setup: editable, Checks: []Check{test}}},
+		{"pyproject without pytest", map[string]string{"pyproject.toml": "[project]"}, []string{"pyproject.toml"}, Detected{Setup: editable}},
+		{"pytest is case-sensitive", map[string]string{"pyproject.toml": "PyTest"}, []string{"pyproject.toml"}, Detected{Setup: editable}},
+		{"requirements with pytest", map[string]string{"requirements.txt": "pytest>=8\n"}, []string{"requirements.txt"}, Detected{Setup: reqSetup, Checks: []Check{test}}},
+		{"requirements without pytest", map[string]string{"requirements.txt": "requests"}, []string{"requirements.txt"}, Detected{Setup: reqSetup}},
+		{"requirements preferred for setup", map[string]string{"pyproject.toml": "[project]", "requirements.txt": "pytest"}, []string{"pyproject.toml", "requirements.txt"}, Detected{Setup: reqSetup, Checks: []Check{test}}},
+		{"pytest in pyproject with plain requirements", map[string]string{"pyproject.toml": "pytest", "requirements.txt": "requests"}, []string{"pyproject.toml", "requirements.txt"}, Detected{Setup: reqSetup, Checks: []Check{test}}},
+		{"untracked requirements ignored", map[string]string{"pyproject.toml": "[project]", "requirements.txt": "pytest"}, []string{"pyproject.toml"}, Detected{Setup: editable}},
+		{"untracked pyproject text ignored", map[string]string{"pyproject.toml": "pytest [tool.ruff]", "requirements.txt": "requests"}, []string{"requirements.txt"}, Detected{Setup: reqSetup}},
+		{"untracked pyproject", map[string]string{"pyproject.toml": "pytest [tool.ruff]"}, []string{"README.md", "ruff.toml"}, Detected{}},
+		{"manifest without text", nil, []string{"pyproject.toml", "requirements.txt", "ruff.toml", "pytest.ini"}, Detected{}},
+		{"nested manifest", map[string]string{"app/pyproject.toml": "pytest"}, []string{"app/pyproject.toml"}, Detected{}},
+		{"readme only", map[string]string{"README.md": "# demo"}, []string{"README.md"}, Detected{}},
+		{"tool.ruff table", map[string]string{"pyproject.toml": "[tool.pytest]\n[tool.ruff]"}, []string{"pyproject.toml"}, Detected{Setup: editable, Checks: []Check{test, lint}}},
+		{"tool.ruff subtable", map[string]string{"pyproject.toml": "[tool.ruff.lint]"}, []string{"pyproject.toml"}, Detected{Setup: editable, Checks: []Check{lint}}},
+		{"ruff in requirements text is not a table", map[string]string{"requirements.txt": "ruff"}, []string{"requirements.txt"}, Detected{Setup: reqSetup}},
+		{"tool.ruff in requirements text does not count", map[string]string{"requirements.txt": "[tool.ruff]"}, []string{"requirements.txt"}, Detected{Setup: reqSetup}},
+		{"ruff.toml", map[string]string{"pyproject.toml": "[project]"}, []string{"pyproject.toml", "ruff.toml"}, Detected{Setup: editable, Checks: []Check{lint}, Protect: []string{"ruff.toml"}}},
+		{"hidden ruff.toml", map[string]string{"pyproject.toml": "[project]"}, []string{"pyproject.toml", ".ruff.toml"}, Detected{Setup: editable, Checks: []Check{lint}, Protect: []string{".ruff.toml"}}},
+		{"single lint with several sources", map[string]string{"pyproject.toml": "[tool.ruff]"}, []string{"pyproject.toml", "ruff.toml", ".ruff.toml"}, Detected{Setup: editable, Checks: []Check{lint}, Protect: []string{"ruff.toml", ".ruff.toml"}}},
+		{"all configs in order", map[string]string{"pyproject.toml": "[project]"}, []string{"pytest.ini", ".ruff.toml", "ruff.toml", "pyproject.toml"}, Detected{Setup: editable, Checks: []Check{lint}, Protect: []string{"ruff.toml", ".ruff.toml", "pytest.ini"}}},
+		{"pytest.ini alone is not pytest mention", map[string]string{"pyproject.toml": "[project]"}, []string{"pyproject.toml", "pytest.ini"}, Detected{Setup: editable, Protect: []string{"pytest.ini"}}},
+		{"untracked configs", map[string]string{"pyproject.toml": "[tool.pytest]", "ruff.toml": "", "pytest.ini": ""}, []string{"pyproject.toml"}, Detected{Setup: editable, Checks: []Check{test}}},
+		{"configs without a python project", map[string]string{"ruff.toml": "", "pytest.ini": ""}, []string{"ruff.toml", ".ruff.toml", "pytest.ini"}, Detected{}},
+		{"go", map[string]string{"go.mod": "module x", "pyproject.toml": "[tool.pytest]"}, []string{"go.mod", "pyproject.toml"}, Detected{Setup: []string{"go mod download", "python -m pip install -e ."}, Checks: []Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}, test}}},
+		{"cargo before python and gradle after", map[string]string{"Cargo.toml": "", "pyproject.toml": "[tool.pytest]"}, []string{"Cargo.toml", "pyproject.toml", "build.gradle", "pom.xml"}, Detected{Setup: []string{"cargo fetch", "python -m pip install -e ."}, Fix: []string{"cargo fmt"}, Checks: []Check{{"cargo-format", "cargo fmt --check"}, {"cargo-build", "cargo build --all-targets"}, {"cargo-test", "cargo test"}, test, {"gradle-check", "gradle check --console=plain"}, {"maven-verify", "mvn -B -ntp verify"}}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetectGradle(t *testing.T) {
 	plain := []Check{{"gradle-check", "gradle check --console=plain"}}
 	wrapped := []Check{{"gradle-check", "./gradlew check --console=plain"}}

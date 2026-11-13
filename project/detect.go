@@ -36,6 +36,7 @@ func Detect(files map[string]string, tracked []string) Detected {
 	detectGo(&d, files, tracked)
 	detectBundler(&d, files, tracked)
 	detectCargo(&d, files, tracked)
+	detectPython(&d, files, tracked)
 	detectGradle(&d, tracked)
 	detectMaven(&d, tracked)
 	return d
@@ -224,6 +225,35 @@ func detectCargo(d *Detected, files map[string]string, tracked []string) {
 		d.Checks = append(d.Checks, Check{"cargo-clippy", "cargo clippy --all-targets -- -D warnings"})
 	}
 	for _, protected := range []string{"rustfmt.toml", ".rustfmt.toml", "clippy.toml"} {
+		if slices.Contains(tracked, protected) {
+			d.Protect = append(d.Protect, protected)
+		}
+	}
+}
+
+// detectPython recognises a Python project by a tracked root pyproject.toml or requirements.txt with
+// its text in files. Config files count only through tracked.
+func detectPython(d *Detected, files map[string]string, tracked []string) {
+	present := func(name string) bool {
+		_, ok := files[name]
+		return ok && slices.Contains(tracked, name)
+	}
+	pyproject, requirements := present("pyproject.toml"), present("requirements.txt")
+	if !pyproject && !requirements {
+		return
+	}
+	if requirements {
+		d.Setup = append(d.Setup, "python -m pip install -r requirements.txt")
+	} else {
+		d.Setup = append(d.Setup, "python -m pip install -e .")
+	}
+	if (pyproject && strings.Contains(files["pyproject.toml"], "pytest")) || (requirements && strings.Contains(files["requirements.txt"], "pytest")) {
+		d.Checks = append(d.Checks, Check{"python-test", "pytest"})
+	}
+	if (pyproject && strings.Contains(files["pyproject.toml"], "[tool.ruff")) || slices.Contains(tracked, "ruff.toml") || slices.Contains(tracked, ".ruff.toml") {
+		d.Checks = append(d.Checks, Check{"python-lint", "python -m ruff check ."})
+	}
+	for _, protected := range []string{"ruff.toml", ".ruff.toml", "pytest.ini"} {
 		if slices.Contains(tracked, protected) {
 			d.Protect = append(d.Protect, protected)
 		}
