@@ -2,7 +2,6 @@ package project
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -367,18 +366,6 @@ func TestModelsFileRules(t *testing.T) {
 				t.Errorf("lines %q, want %q", se.Lines, c.lines)
 			}
 		})
-	}
-}
-
-func TestParseConfigRefusesRemovedOptions(t *testing.T) {
-	// shape_workers, shape_audit, shape_decision_check and review_material were removed: they
-	// are unknown keys like any other.
-	for _, key := range []string{"shape_workers", "shape_audit", "shape_decision_check", "review_material"} {
-		_, err := ParseConfig("version: 1\n"+key+":\n  enabled: true\n", "p")
-		var se *sys.Error
-		if !errors.As(err, &se) || !slices.Equal(se.Lines, []string{"line 2: unknown key " + key}) {
-			t.Errorf("%s: %v", key, err)
-		}
 	}
 }
 

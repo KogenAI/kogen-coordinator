@@ -1,0 +1,1 @@
+{"deferred":"The change is a multi-file deletion across code, tests and docs; the Build performs it and the grep and go test scenarios verify it."}

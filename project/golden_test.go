@@ -156,33 +156,18 @@ func elixirConfig(m map[string]any) map[string]any {
 	return m
 }
 
-var (
-	allowlistLine = regexp.MustCompile(`^line \d+: (models|shape_workers)\.(\w+): (supergrok|opencode-go|anthropic) supports `)
-	requiresLine  = regexp.MustCompile(`^line \d+: shape_workers\.(\w+) requires explicit model and effort$`)
-)
+var allowlistLine = regexp.MustCompile(`^line \d+: models\.(\w+): (supergrok|opencode-go|anthropic) supports `)
 
 // openModelSelection is main's expected configuration error under the one approved change to
 // configuration (KOGEN-057, intent go-core-migration "Open model selection"): the model and
-// effort allowlist refusals are gone, a shape worker they refused now counts as configured,
-// and the provider list names openai-compatible. accepted reports that nothing is left to
-// refuse. The golden file itself stays exactly what main's Elixir produced.
+// effort allowlist refusals are gone and the provider list names openai-compatible. accepted
+// reports that nothing is left to refuse. The golden file itself stays exactly what main's Elixir produced.
 func openModelSelection(want *goldenError) (*goldenError, bool) {
-	refused := map[string]bool{}
-	var kept []string
+	var lines []string
 	dropped := false
 	for _, l := range want.Lines {
-		if m := allowlistLine.FindStringSubmatch(l); m != nil {
+		if allowlistLine.MatchString(l) {
 			dropped = true
-			if m[1] == "shape_workers" {
-				refused[m[2]] = true
-			}
-			continue
-		}
-		kept = append(kept, l)
-	}
-	var lines []string
-	for _, l := range kept {
-		if m := requiresLine.FindStringSubmatch(l); m != nil && refused[m[1]] {
 			continue
 		}
 		lines = append(lines, strings.Replace(l, "must be chatgpt, supergrok, opencode-go or anthropic",

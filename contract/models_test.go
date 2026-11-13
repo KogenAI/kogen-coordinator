@@ -53,8 +53,6 @@ func TestModelsLineup(t *testing.T) {
 func TestModelsValidation(t *testing.T) {
 	for _, body := range []string{
 		"models:\n  build: {provider: openai-compatible, model: m, effort: high}\n",
-		"models:\n  build: {executor: native, model: m, effort: high, max_rounds: 2}\n",
-		"models:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n",
 		"models:\n  build: {executor: claude-code, provider: anthropic, model: m, effort: max}\n",
 		"models:\n  build: {provider: anthropic, model: m, effort: ultra}\n",
 		"models: {}\nversion: 1\n",

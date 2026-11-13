@@ -1232,3 +1232,40 @@ func TestPublishSourceFlushesTheReceiptAndTheArchiveWithDurableSync(t *testing.T
 	requireFlush("the archive", archive, first)
 	requireFlush("the receipt's temp file", SourcePath(root, "x")+".tmp", second)
 }
+
+func TestConfigDigestCoversOnlyCurrentFields(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Setup:      []string{"s"},
+			Fix:        []string{"f"},
+			Checks:     []Check{{"c", "run"}},
+			Acceptance: &Acceptance{Run: "a", StepsDir: "d"},
+			Protect:    []string{"p"},
+			Models:     DefaultModels(),
+		}
+	}
+	want := configDigest(base())
+	if got := configDigest(base()); got != want {
+		t.Fatalf("digest is not stable: %s, %s", got, want)
+	}
+	for name, change := range map[string]func(*Config){
+		"setup":      func(c *Config) { c.Setup = []string{"s2"} },
+		"fix":        func(c *Config) { c.Fix = []string{"f2"} },
+		"checks":     func(c *Config) { c.Checks = []Check{{"c", "run2"}} },
+		"acceptance": func(c *Config) { c.Acceptance.Run = "a2" },
+		"steps_dir":  func(c *Config) { c.Acceptance.StepsDir = "d2" },
+		"protect":    func(c *Config) { c.Protect = []string{"p2"} },
+		"models":     func(c *Config) { c.Models["build"] = Role{Provider: DefaultProvider, Model: "x", Effort: "low"} },
+	} {
+		c := base()
+		change(c)
+		if got := configDigest(c); got == want {
+			t.Errorf("changing %s leaves the digest unchanged", name)
+		}
+	}
+	c := base()
+	c.ProtectDiagnostics = []ProtectDiagnostic{{Entry: "p", Severity: "warning", Message: "m"}}
+	if got := configDigest(c); got != want {
+		t.Errorf("protect diagnostics change the digest: %s, want %s", got, want)
+	}
+}

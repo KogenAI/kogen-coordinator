@@ -218,9 +218,6 @@ func TestExecutorRoleLineup(t *testing.T) {
 		t.Fatalf("Executor = %q", got)
 	}
 
-	_, err = loadWithTeamModels(t, "models:\n  build: {executor: claude-code, model: m, effort: high, max_rounds: 3}\n")
-	wantSysError(t, err, "environment", "project_config_invalid", 3)
-
 	// An explicit native role is the omitted one, and neither names an executor in its state.
 	omitted, err := loadWithTeamModels(t, "models:\n  review: {model: r, effort: high}\n")
 	if err != nil {
@@ -238,9 +235,6 @@ func TestExecutorRoleLineup(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "native role JSON", string(b), `{"Provider":"chatgpt","Model":"r","Effort":"high"}`)
-
-	_, err = loadWithTeamModels(t, "models:\n  build: {executor: native, model: m, effort: low, max_rounds: 2}\n")
-	wantSysError(t, err, "environment", "project_config_invalid", 3)
 }
 
 // kogen cli/readiness/readiness.go reads what it can of an invalid file and lists the model
