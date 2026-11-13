@@ -37,6 +37,7 @@ func Detect(files map[string]string, tracked []string) Detected {
 	detectBundler(&d, files, tracked)
 	detectCargo(&d, files, tracked)
 	detectPython(&d, files, tracked)
+	detectComposer(&d, files, tracked)
 	detectGradle(&d, tracked)
 	detectMaven(&d, tracked)
 	return d
@@ -254,6 +255,32 @@ func detectPython(d *Detected, files map[string]string, tracked []string) {
 		d.Checks = append(d.Checks, Check{"python-lint", "python -m ruff check ."})
 	}
 	for _, protected := range []string{"ruff.toml", ".ruff.toml", "pytest.ini"} {
+		if slices.Contains(tracked, protected) {
+			d.Protect = append(d.Protect, protected)
+		}
+	}
+}
+
+// detectComposer recognises a PHP Composer project by a tracked root composer.json with its text in
+// files. The lock and config files count only through tracked; tool mentions are substring matches
+// of the composer.json text.
+func detectComposer(d *Detected, files map[string]string, tracked []string) {
+	manifest, ok := files["composer.json"]
+	if !ok || !slices.Contains(tracked, "composer.json") {
+		return
+	}
+	if slices.Contains(tracked, "composer.lock") {
+		d.Setup = append(d.Setup, "composer install --no-interaction --prefer-dist")
+	} else {
+		d.Setup = append(d.Setup, "composer update --no-interaction --prefer-dist")
+	}
+	if strings.Contains(manifest, "phpunit/phpunit") {
+		d.Checks = append(d.Checks, Check{"composer-test", "vendor/bin/phpunit"})
+	}
+	if strings.Contains(manifest, "phpstan/phpstan") {
+		d.Checks = append(d.Checks, Check{"composer-stan", "vendor/bin/phpstan analyse"})
+	}
+	for _, protected := range []string{"phpunit.xml", "phpunit.xml.dist", "phpstan.neon", "phpstan.neon.dist"} {
 		if slices.Contains(tracked, protected) {
 			d.Protect = append(d.Protect, protected)
 		}

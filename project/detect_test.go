@@ -320,6 +320,45 @@ func TestDetectPython(t *testing.T) {
 	}
 }
 
+func TestDetectComposer(t *testing.T) {
+	test := Check{"composer-test", "vendor/bin/phpunit"}
+	stan := Check{"composer-stan", "vendor/bin/phpstan analyse"}
+	install := []string{"composer install --no-interaction --prefer-dist"}
+	update := []string{"composer update --no-interaction --prefer-dist"}
+	unit := `{"require-dev":{"phpunit/phpunit":"^11"}}`
+	both := `{"require-dev":{"phpunit/phpunit":"^11","phpstan/phpstan":"^2"}}`
+	cases := []struct {
+		name    string
+		files   map[string]string
+		tracked []string
+		want    Detected
+	}{
+		{"phpunit with tracked lock", map[string]string{"composer.json": unit}, []string{"composer.json", "composer.lock"}, Detected{Setup: install, Checks: []Check{test}}},
+		{"phpunit without lock", map[string]string{"composer.json": unit}, []string{"composer.json"}, Detected{Setup: update, Checks: []Check{test}}},
+		{"untracked lock gives update", map[string]string{"composer.json": "{}", "composer.lock": "{}"}, []string{"composer.json"}, Detected{Setup: update}},
+		{"neither tool", map[string]string{"composer.json": `{"require":{"monolog/monolog":"^3"}}`}, []string{"composer.json", "composer.lock"}, Detected{Setup: install}},
+		{"phpstan only", map[string]string{"composer.json": `{"require-dev":{"phpstan/phpstan":"^2"}}`}, []string{"composer.json", "composer.lock"}, Detected{Setup: install, Checks: []Check{stan}}},
+		{"tool mention is case-sensitive", map[string]string{"composer.json": `{"PHPUnit/PHPUnit":"1"}`}, []string{"composer.json"}, Detected{Setup: update}},
+		{"both tools with tracked configs", map[string]string{"composer.json": both, "phpstan.neon": "", "phpunit.xml.dist": ""}, []string{"composer.json", "composer.lock", "phpstan.neon", "phpunit.xml.dist"}, Detected{Setup: install, Checks: []Check{test, stan}, Protect: []string{"phpunit.xml.dist", "phpstan.neon"}}},
+		{"all configs in order", map[string]string{"composer.json": "{}"}, []string{"phpstan.neon.dist", "phpstan.neon", "phpunit.xml.dist", "phpunit.xml", "composer.json"}, Detected{Setup: update, Protect: []string{"phpunit.xml", "phpunit.xml.dist", "phpstan.neon", "phpstan.neon.dist"}}},
+		{"untracked phpstan.neon", map[string]string{"composer.json": `{"phpstan/phpstan":"^2"}`, "phpstan.neon": ""}, []string{"composer.json", "composer.lock"}, Detected{Setup: install, Checks: []Check{stan}}},
+		{"untracked composer.json", map[string]string{"composer.json": unit}, []string{"README.md", "phpunit.xml"}, Detected{}},
+		{"composer.json without text", nil, []string{"composer.json", "composer.lock", "phpunit.xml"}, Detected{}},
+		{"configs without a composer project", map[string]string{"phpunit.xml": ""}, []string{"phpunit.xml", "phpstan.neon"}, Detected{}},
+		{"nested composer.json", map[string]string{"app/composer.json": unit}, []string{"app/composer.json"}, Detected{}},
+		{"go before composer", map[string]string{"go.mod": "module x", "composer.json": unit}, []string{"go.mod", "composer.json", "composer.lock"}, Detected{Setup: []string{"go mod download", install[0]}, Checks: []Check{{"go-format", `test -z "$(gofmt -l .)"`}, {"go-test", "go test ./..."}, {"go-vet", "go vet ./..."}, {"go-build", "go build -o /dev/null ./..."}, test}}},
+		{"python before composer and gradle after", map[string]string{"pyproject.toml": "[tool.pytest]", "composer.json": unit}, []string{"pyproject.toml", "composer.json", "build.gradle"}, Detected{Setup: []string{"python -m pip install -e .", update[0]}, Checks: []Check{{"python-test", "pytest"}, test, {"gradle-check", "gradle check --console=plain"}}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Detect(c.files, c.tracked)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetectGradle(t *testing.T) {
 	plain := []Check{{"gradle-check", "gradle check --console=plain"}}
 	wrapped := []Check{{"gradle-check", "./gradlew check --console=plain"}}
