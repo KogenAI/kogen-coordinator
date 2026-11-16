@@ -72,7 +72,7 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {
 		return "", &sys.Error{
 			Class: "environment", Reason: "commit_failed", Exit: 3,
 			Detail: fmt.Sprintf("git commit failed (status %d); the verified changes are left uncommitted", res.Status),
-			Lines:  strings.Split(strings.TrimSpace(res.Output), "\n"),
+			Lines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), "\n"),
 		}
 	}
 	return r.landed(s, spec)
@@ -152,9 +152,13 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {
 		if len(paths) == 0 {
 			paths = []string{"the commit itself"}
 		}
+		named := strings.Join(paths[:min(10, len(paths))], ", ")
+		if len(paths) > 10 {
+			named += fmt.Sprintf(" and %d more", len(paths)-10)
+		}
 		return "", &sys.Error{
 			Class: "candidate", Reason: "hook_changed_commit", Exit: 1,
-			Detail: "a commit hook changed " + strings.Join(paths, ", ") + "; the commit was undone and the changes are left in place",
+			Detail: "a commit hook changed " + named + "; the commit was undone and the changes are left in place",
 		}
 	}
 	trailers, err := r.intentTrailers(head)
@@ -308,7 +312,7 @@ func (r *Repo) CommitPaths(s *sys.Session, subject string, paths []string, hadHe
 		return "", &sys.Error{
 			Class: "environment", Reason: "commit_failed", Exit: 3,
 			Detail: fmt.Sprintf("git commit failed (status %d); the configuration is left uncommitted", res.Status),
-			Lines:  strings.Split(strings.TrimSpace(res.Output), "\n"),
+			Lines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), "\n"),
 		}
 	}
 	head, err := r.okTrim(nil, "rev-parse", "HEAD")

@@ -87,7 +87,8 @@ hook, a lock held by a dead tool or a hung filesystem cannot block a Build silen
   its request), so a large materialization runs as long as every blob keeps arriving.
 - `git.CommitTimeout` (1 hour) bounds the commands that run the user's commit hooks: the
   `git commit` of `Commit` and `CommitPaths`, and the `git hook run --ignore-missing commit-msg`
-  of `CheckCommitMsg`.
+  of `CheckCommitMsg`. Refusals keep the last 20 lines of a failing commit’s output
+  and name only the first 10 paths of a hook-changed commit, counting any remaining paths.
 
 Each command runs in its own process group. At its bound the whole group is killed with
 SIGKILL, so Git and its children (hooks, `sleep`, ...) stop, and the caller receives a

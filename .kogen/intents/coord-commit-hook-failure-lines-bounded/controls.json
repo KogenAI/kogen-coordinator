@@ -1,0 +1,51 @@
+{
+ "correct": {
+  "files": {
+   "git/commit.go": {
+    "patch": "diff --git a/git/commit.go b/git/commit.go\nindex 5ff1eb6..b009b4d 100644\n--- a/git/commit.go\n+++ b/git/commit.go\n@@ -72,7 +72,7 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"environment\", Reason: \"commit_failed\", Exit: 3,\n \t\t\tDetail: fmt.Sprintf(\"git commit failed (status %d); the verified changes are left uncommitted\", res.Status),\n-\t\t\tLines:  strings.Split(strings.TrimSpace(res.Output), \"\\n\"),\n+\t\t\tLines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), \"\\n\"),\n \t\t}\n \t}\n \treturn r.landed(s, spec)\n@@ -152,9 +152,13 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {\n \t\tif len(paths) == 0 {\n \t\t\tpaths = []string{\"the commit itself\"}\n \t\t}\n+\t\tshown, more := paths, \"\"\n+\t\tif len(paths) > 10 {\n+\t\t\tshown, more = paths[:10], fmt.Sprintf(\" and %d more\", len(paths)-10)\n+\t\t}\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"candidate\", Reason: \"hook_changed_commit\", Exit: 1,\n-\t\t\tDetail: \"a commit hook changed \" + strings.Join(paths, \", \") + \"; the commit was undone and the changes are left in place\",\n+\t\t\tDetail: \"a commit hook changed \" + strings.Join(shown, \", \") + more + \"; the commit was undone and the changes are left in place\",\n \t\t}\n \t}\n \ttrailers, err := r.intentTrailers(head)\n@@ -308,7 +312,7 @@ func (r *Repo) CommitPaths(s *sys.Session, subject string, paths []string, hadHe\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"environment\", Reason: \"commit_failed\", Exit: 3,\n \t\t\tDetail: fmt.Sprintf(\"git commit failed (status %d); the configuration is left uncommitted\", res.Status),\n-\t\t\tLines:  strings.Split(strings.TrimSpace(res.Output), \"\\n\"),\n+\t\t\tLines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), \"\\n\"),\n \t\t}\n \t}\n \thead, err := r.okTrim(nil, \"rev-parse\", \"HEAD\")\n"
+   }
+  }
+ },
+ "wrong": [
+  {
+   "name": "Commit keeps every hook line",
+   "scenario": "Commit failure keeps the last 20 hook lines",
+   "step": "Then coord-commit-hook-failure-lines-bounded: the refusal carries 20 hook lines, the first \"line 11\" and the last \"line 30\"",
+   "files": {
+    "git/commit.go": {
+     "patch": "diff --git a/git/commit.go b/git/commit.go\nindex b009b4d..edec2e1 100644\n--- a/git/commit.go\n+++ b/git/commit.go\n@@ -72,7 +72,7 @@ func (r *Repo) Commit(s *sys.Session, spec CommitSpec) (string, error) {\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"environment\", Reason: \"commit_failed\", Exit: 3,\n \t\t\tDetail: fmt.Sprintf(\"git commit failed (status %d); the verified changes are left uncommitted\", res.Status),\n-\t\t\tLines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), \"\\n\"),\n+\t\t\tLines:  strings.Split(strings.TrimSpace(res.Output), \"\\n\"),\n \t\t}\n \t}\n \treturn r.landed(s, spec)\n"
+    }
+   }
+  },
+  {
+   "name": "CommitPaths keeps every hook line",
+   "scenario": "CommitPaths failure keeps the last 20 hook lines",
+   "step": "Then coord-commit-hook-failure-lines-bounded: the refusal carries 20 hook lines, the first \"line 11\" and the last \"line 30\"",
+   "files": {
+    "git/commit.go": {
+     "patch": "diff --git a/git/commit.go b/git/commit.go\nindex b009b4d..ace729f 100644\n--- a/git/commit.go\n+++ b/git/commit.go\n@@ -312,7 +312,7 @@ func (r *Repo) CommitPaths(s *sys.Session, subject string, paths []string, hadHe\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"environment\", Reason: \"commit_failed\", Exit: 3,\n \t\t\tDetail: fmt.Sprintf(\"git commit failed (status %d); the configuration is left uncommitted\", res.Status),\n-\t\t\tLines:  strings.Split(tailLines(strings.TrimSpace(res.Output), 20), \"\\n\"),\n+\t\t\tLines:  strings.Split(strings.TrimSpace(res.Output), \"\\n\"),\n \t\t}\n \t}\n \thead, err := r.okTrim(nil, \"rev-parse\", \"HEAD\")\n"
+    }
+   }
+  },
+  {
+   "name": "Over ten paths lists ten with no count",
+   "scenario": "More than 10 changed paths are counted",
+   "step": "Then coord-commit-hook-failure-lines-bounded: the commit is undone with the detail \"a commit hook changed hook-01.txt, hook-02.txt, hook-03.txt, hook-04.txt, hook-05.txt, hook-06.txt, hook-07.txt, hook-08.txt, hook-09.txt, hook-10.txt and 2 more; the commit was undone and the changes are left in place\"",
+   "files": {
+    "git/commit.go": {
+     "patch": "diff --git a/git/commit.go b/git/commit.go\nindex b009b4d..7356438 100644\n--- a/git/commit.go\n+++ b/git/commit.go\n@@ -154,7 +154,7 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {\n \t\t}\n \t\tshown, more := paths, \"\"\n \t\tif len(paths) > 10 {\n-\t\t\tshown, more = paths[:10], fmt.Sprintf(\" and %d more\", len(paths)-10)\n+\t\t\tshown = paths[:10]\n \t\t}\n \t\treturn \"\", &sys.Error{\n \t\t\tClass: \"candidate\", Reason: \"hook_changed_commit\", Exit: 1,\n"
+    }
+   }
+  },
+  {
+   "name": "Exactly ten paths append and 0 more",
+   "scenario": "Exactly 10 changed paths are all listed",
+   "step": "Then coord-commit-hook-failure-lines-bounded: the commit is undone with the detail \"a commit hook changed hook-01.txt, hook-02.txt, hook-03.txt, hook-04.txt, hook-05.txt, hook-06.txt, hook-07.txt, hook-08.txt, hook-09.txt, hook-10.txt; the commit was undone and the changes are left in place\"",
+   "files": {
+    "git/commit.go": {
+     "patch": "diff --git a/git/commit.go b/git/commit.go\nindex b009b4d..08bb969 100644\n--- a/git/commit.go\n+++ b/git/commit.go\n@@ -153,7 +153,7 @@ func (r *Repo) landed(s *sys.Session, spec CommitSpec) (string, error) {\n \t\t\tpaths = []string{\"the commit itself\"}\n \t\t}\n \t\tshown, more := paths, \"\"\n-\t\tif len(paths) > 10 {\n+\t\tif len(paths) >= 10 {\n \t\t\tshown, more = paths[:10], fmt.Sprintf(\" and %d more\", len(paths)-10)\n \t\t}\n \t\treturn \"\", &sys.Error{\n"
+    }
+   }
+  }
+ ]
+}

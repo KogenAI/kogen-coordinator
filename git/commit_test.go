@@ -106,6 +106,25 @@ func TestCommitIgnoresInheritedRepositoryLocation(t *testing.T) {
 	equal(t, "other untouched", strings.TrimSpace(run(t, other, f.Env, "rev-list", "--all", "--count")), "0")
 }
 
+func TestCommitFailureKeepsTheLast20HookLines(t *testing.T) {
+	f, spec := candidate(t)
+	var script strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&script, "echo 'line %d'\n", i)
+	}
+	f.hook(t, "pre-commit", script.String()+"exit 7\n")
+	s, _ := f.session()
+	_, err := f.Commit(s, spec)
+	e := wantSysError(t, err, "environment", "commit_failed", 3)
+	equal(t, "detail", e.Detail, "git commit failed (status 1); the verified changes are left uncommitted")
+	equal(t, "lines", len(e.Lines), 20)
+	for i, line := range e.Lines {
+		equal(t, "line", line, fmt.Sprintf("line %d", i+11))
+	}
+	equal(t, "head", f.Head(), spec.Start)
+
+}
+
 func TestCommitFailureReportsGitOutputAndLeavesTheCommitUndone(t *testing.T) {
 	f, spec := candidate(t)
 	f.hook(t, "pre-commit", "echo 'lint failed: first'\necho 'lint failed: second' >&2\nexit 7\n")
@@ -142,6 +161,40 @@ func TestCommitUndoesACommitWhoseHookChangedTheTree(t *testing.T) {
 	reflog := f.git(t, "reflog", "-3", "--format=%gs")
 	if !strings.Contains(reflog, "kogen: undo the unverified commit") {
 		t.Fatalf("reflog lacks the undo entry:\n%s", reflog)
+	}
+}
+
+func TestHookChangedCommitNamesTenPathsAndCountsTheRest(t *testing.T) {
+	f, spec := candidate(t)
+	var script strings.Builder
+	for i := 1; i <= 12; i++ {
+		fmt.Fprintf(&script, "printf 'hook edit\\n' > hook-%02d.txt\ngit add hook-%02d.txt\n", i, i)
+	}
+	f.hook(t, "pre-commit", script.String())
+	s, _ := f.session()
+	_, err := f.Commit(s, spec)
+	e := wantSysError(t, err, "candidate", "hook_changed_commit", 1)
+	equal(t, "detail", e.Detail, "a commit hook changed hook-01.txt, hook-02.txt, hook-03.txt, hook-04.txt, hook-05.txt, hook-06.txt, hook-07.txt, hook-08.txt, hook-09.txt, hook-10.txt and 2 more; the commit was undone and the changes are left in place")
+	equal(t, "head back at start", f.Head(), spec.Start)
+	for i := 1; i <= 12; i++ {
+		equal(t, "hook edit stays", string(must(os.ReadFile(filepath.Join(f.Dir, fmt.Sprintf("hook-%02d.txt", i))))), "hook edit\n")
+	}
+}
+
+func TestHookChangedCommitWithTenPathsListsAllOfThem(t *testing.T) {
+	f, spec := candidate(t)
+	var script strings.Builder
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&script, "printf 'hook edit\\n' > hook-%02d.txt\ngit add hook-%02d.txt\n", i, i)
+	}
+	f.hook(t, "pre-commit", script.String())
+	s, _ := f.session()
+	_, err := f.Commit(s, spec)
+	e := wantSysError(t, err, "candidate", "hook_changed_commit", 1)
+	equal(t, "detail", e.Detail, "a commit hook changed hook-01.txt, hook-02.txt, hook-03.txt, hook-04.txt, hook-05.txt, hook-06.txt, hook-07.txt, hook-08.txt, hook-09.txt, hook-10.txt; the commit was undone and the changes are left in place")
+	equal(t, "head back at start", f.Head(), spec.Start)
+	for i := 1; i <= 10; i++ {
+		equal(t, "hook edit stays", string(must(os.ReadFile(filepath.Join(f.Dir, fmt.Sprintf("hook-%02d.txt", i))))), "hook edit\n")
 	}
 }
 
@@ -245,6 +298,27 @@ func TestCommitPathsInAnEmptyRepository(t *testing.T) {
 		t.Fatalf("CommitPaths = %q, %v", sha, err)
 	}
 	equal(t, "head", r.Head()[:8], sha)
+}
+
+func TestCommitPathsFailureKeepsTheLast20HookLines(t *testing.T) {
+	f := newFixture(t)
+	start := f.Head()
+	f.write(t, "README.md", "changed\n")
+	var script strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&script, "echo 'line %d'\n", i)
+	}
+	f.hook(t, "pre-commit", script.String()+"exit 7\n")
+	s, _ := f.session()
+	_, err := f.CommitPaths(s, "Add Kogen configuration", []string{"README.md"}, true)
+	e := wantSysError(t, err, "environment", "commit_failed", 3)
+	equal(t, "detail", e.Detail, "git commit failed (status 1); the configuration is left uncommitted")
+	equal(t, "lines", len(e.Lines), 20)
+	for i, line := range e.Lines {
+		equal(t, "line", line, fmt.Sprintf("line %d", i+11))
+	}
+	equal(t, "head", f.Head(), start)
+	equal(t, "nothing staged", f.git(t, "diff", "--cached", "--name-only"), "")
 }
 
 func TestCommitPathsFailureUnstagesAndReportsOutput(t *testing.T) {
