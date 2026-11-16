@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -16,6 +17,31 @@ import (
 // psBound is the wall time of one `ps` fallback run. At the bound the whole process group is
 // killed with SIGKILL.
 const psBound = 5 * time.Second
+
+var (
+	psBoundMu sync.Mutex
+	psBoundV  = psBound
+)
+
+// overridePSBound is the test seam: until the returned restore is called, the bound of a `ps`
+// fallback run is d instead of psBound. restore puts back the value in effect before the call.
+func overridePSBound(d time.Duration) (restore func()) {
+	psBoundMu.Lock()
+	prev := psBoundV
+	psBoundV = d
+	psBoundMu.Unlock()
+	return func() {
+		psBoundMu.Lock()
+		psBoundV = prev
+		psBoundMu.Unlock()
+	}
+}
+
+func psTimeout() time.Duration {
+	psBoundMu.Lock()
+	defer psBoundMu.Unlock()
+	return psBoundV
+}
 
 // psWaitDelay is how long past the kill the wait for the output pipe may last, in case a
 // process outside the group still holds it.
@@ -67,7 +93,8 @@ func runPS(pid int, columns ...string) ([]byte, error) {
 	for _, c := range columns {
 		args = append(args, "-o", c)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), psBound)
+	bound := psTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ps", args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -81,7 +108,7 @@ func runPS(pid int, columns ...string) ([]byte, error) {
 	cmd.Stdout = &out
 	err := cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("ps -p %d timed out after %s", pid, psBound)
+		return nil, fmt.Errorf("ps -p %d timed out after %s", pid, bound)
 	}
 	if err != nil {
 		var exit *exec.ExitError

@@ -99,7 +99,7 @@ func (l *Lock) Acquire() (LockResult, error) {
 			return LockResult{}, err
 		}
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			pid := lockPID(f)
+			pid := realPID(lockPID(f))
 			f.Close()
 			if errors.Is(err, syscall.EWOULDBLOCK) {
 				return LockResult{Status: Held, PID: pid}, nil
@@ -190,7 +190,7 @@ func LockOwner(path string) (pid, token string, held bool) {
 	held, _ = NewLock(path).Held()
 	if st, err := os.Lstat(path); err == nil && st.IsDir() {
 		pid, _, _ = NewLock(path).legacyDirectory(false)
-		return pid, "", held
+		return realPID(pid), "", held
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -199,7 +199,7 @@ func LockOwner(path string) (pid, token string, held bool) {
 	defer f.Close()
 	content, _ := readLock(f)
 	if p, legacy := legacyPID(content); legacy {
-		return p, "", held
+		return realPID(p), "", held
 	}
 	for _, line := range strings.Split(content, "\n") {
 		if v, ok := strings.CutPrefix(line, "pid "); ok {
@@ -209,7 +209,18 @@ func LockOwner(path string) (pid, token string, held bool) {
 			token = v
 		}
 	}
-	return pid, token, held
+	return realPID(pid), token, held
+}
+
+// realPID returns text when it is a positive decimal integer (digits only) and "" otherwise.
+func realPID(text string) string {
+	if text == "" || strings.Trim(text, "0123456789") != "" {
+		return ""
+	}
+	if n, err := strconv.ParseUint(text, 10, 63); err != nil || n == 0 {
+		return ""
+	}
+	return text
 }
 
 // legacyDirectory reads a directory lock of an earlier Kogen; with remove, a dead owner's
@@ -327,7 +338,11 @@ func AcquireBuild(root string, s *sys.Session) (*Lock, error) {
 	case RemovedStale:
 		s.Progress("kogen: removed the lock of a Build that is no longer running")
 	case Held:
-		return nil, sys.Fail("environment", "build_running", "a Build is running in this repository (pid "+res.PID+")", 3)
+		who := "pid not recorded"
+		if res.PID != "" {
+			who = "pid " + res.PID
+		}
+		return nil, sys.Fail("environment", "build_running", "a Build is running in this repository ("+who+")", 3)
 	}
 	return l, nil
 }

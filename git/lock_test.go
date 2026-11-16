@@ -190,6 +190,84 @@ func TestAcquireBuildMessages(t *testing.T) {
 	l.Release()
 }
 
+// holdLockedFile writes content to the Build lock of a fresh root and holds its flock on a
+// second descriptor, so a contender finds the lock held.
+func holdLockedFile(t *testing.T, content string) (root, path string) {
+	t.Helper()
+	root = t.TempDir()
+	path = BuildLockPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return root, path
+}
+
+func TestHeldLockReportsOnlyRealPids(t *testing.T) {
+	recorded := "kogen-build-lock 1\npid 4242\ntoken abc\n"
+	for _, c := range []struct{ name, content, pid, msg string }{
+		{"empty", "", "", "pid not recorded"},
+		{"headerless text", "not-a-pid", "", "pid not recorded"},
+		{"zero", "kogen-build-lock 1\npid 0\ntoken abc\n", "", "pid not recorded"},
+		{"signed", "kogen-build-lock 1\npid -5\ntoken abc\n", "", "pid not recorded"},
+		{"recorded", recorded, "4242", "pid 4242"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root, path := holdLockedFile(t, c.content)
+			_, err := AcquireBuild(root, sys.NewWith(nil, root))
+			e, ok := sys.AsError(err)
+			want := "environment/build_running: a Build is running in this repository (" + c.msg + ")"
+			if !ok || e.Error() != want || e.Exit != 3 {
+				t.Fatalf("AcquireBuild: %v, want %s", err, want)
+			}
+			res, err := NewLock(path).Acquire()
+			if err != nil || res.Status != Held || res.PID != c.pid {
+				t.Fatalf("Acquire = %+v, %v", res, err)
+			}
+			if b, _ := os.ReadFile(path); string(b) != c.content {
+				t.Fatalf("file now holds %q", b)
+			}
+			wantToken := ""
+			if strings.Contains(c.content, "token abc") {
+				wantToken = "abc"
+			}
+			if pid, token, held := LockOwner(path); pid != c.pid || token != wantToken || !held {
+				t.Fatalf("LockOwner = %q %q %v", pid, token, held)
+			}
+		})
+	}
+}
+
+func TestOverridePSBoundRestoresPrevious(t *testing.T) {
+	if psTimeout() != psBound {
+		t.Fatalf("default = %v", psTimeout())
+	}
+	outer := overridePSBound(200 * time.Millisecond)
+	inner := overridePSBound(300 * time.Millisecond)
+	if psTimeout() != 300*time.Millisecond {
+		t.Fatalf("inner = %v", psTimeout())
+	}
+	inner()
+	if psTimeout() != 200*time.Millisecond {
+		t.Fatalf("after inner restore = %v", psTimeout())
+	}
+	outer()
+	if psTimeout() != psBound {
+		t.Fatalf("after outer restore = %v", psTimeout())
+	}
+}
+
 func TestLockOwnerDiagnostics(t *testing.T) {
 	path := lockPath(t)
 	if pid, token, held := LockOwner(path); pid != "" || token != "" || held {
@@ -536,20 +614,19 @@ func fakeSleepingPS(t *testing.T) {
 }
 
 func TestPSFallbackIsBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits for the 5 second bound")
-	}
+	const bound = 200 * time.Millisecond
+	defer overridePSBound(bound)()
 	fakeSleepingPS(t)
 	const absent = 99999999
 	begin := time.Now()
 	birth, err := ProcessBirth(absent)
-	if took := time.Since(begin); took > psBound+2*time.Second {
+	if took := time.Since(begin); took > bound+2*time.Second {
 		t.Errorf("ProcessBirth took %v", took)
 	}
 	if birth != "" || err == nil {
 		t.Fatalf("ProcessBirth = %q, %v", birth, err)
 	}
-	for _, want := range []string{"process 99999999 start time could not be read: ", "/proc/99999999/stat", "ps -p 99999999 timed out after 5s"} {
+	for _, want := range []string{"process 99999999 start time could not be read: ", "/proc/99999999/stat", "ps -p 99999999 timed out after 200ms"} {
 		if runtime.GOOS == "linux" || want != "/proc/99999999/stat" {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q does not name %q", err, want)
@@ -566,7 +643,7 @@ func TestPSFallbackIsBounded(t *testing.T) {
 	l.alive = func(int) bool { return true }
 	begin = time.Now()
 	held, err := l.Held()
-	if took := time.Since(begin); took > psBound+2*time.Second {
+	if took := time.Since(begin); took > bound+2*time.Second {
 		t.Errorf("legacy judgment took %v", took)
 	}
 	if err != nil || held {
