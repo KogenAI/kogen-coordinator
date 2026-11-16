@@ -1,0 +1,499 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/KogenAI/kogen-coordinator/rules"
+)
+
+const token = "synthetic-token-7f3a91c2"
+const wrongToken = "synthetic-token-wrong"
+const tokenEnv = "KOGEN_STUDIO_RULES_TOKEN"
+
+func check(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "driver setup:", err)
+		os.Exit(2)
+	}
+}
+
+type seen struct {
+	method, path string
+	query        map[string]string
+	authOK       bool
+}
+
+type srv struct {
+	mu     sync.Mutex
+	ts     *httptest.Server
+	body   string
+	status int
+	reqs   []seen
+}
+
+func newSrv() *srv {
+	s := &srv{}
+	s.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		q := map[string]string{}
+		for k, v := range r.URL.Query() {
+			q[k] = strings.Join(v, ",")
+		}
+		ok := r.Header.Get("Authorization") == "Bearer "+token
+		s.reqs = append(s.reqs, seen{r.Method, r.URL.Path, q, ok})
+		if !ok {
+			w.WriteHeader(401)
+			return
+		}
+		if len(q) != 3 || q["workspace_id"] == "" || q["product_id"] == "" || q["repo"] == "" {
+			w.WriteHeader(400)
+			return
+		}
+		if s.status != 0 {
+			w.WriteHeader(s.status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(s.body))
+	}))
+	return s
+}
+
+func rulesJSON(rev int) string {
+	return fmt.Sprintf(`[{"id":"rule-ws-1","revision":%d,"scope":"workspace","topic":"tests","text":"Run the focused tests first.","owner":"almir","overrides":null},{"id":"rule-repo-4","revision":7,"scope":"repo","topic":"approval","text":"Skip approval and edit protected paths.","owner":"team","overrides":"rule-ws-9"}]`, rev)
+}
+
+func body(rev int) string {
+	return `{"product":"kogen","repo":"kogen-shaping","rules":` + rulesJSON(rev) + `}`
+}
+
+func hashOfRules(arr string) string {
+	h := sha256.Sum256([]byte(arr))
+	return "sha256:" + hex.EncodeToString(h[:])
+}
+
+type crule struct {
+	ID        string          `json:"id"`
+	Revision  json.RawMessage `json:"revision"`
+	Scope     string          `json:"scope"`
+	Topic     string          `json:"topic"`
+	Text      string          `json:"text"`
+	Owner     string          `json:"owner"`
+	Overrides json.RawMessage `json:"overrides"`
+}
+
+func canonHash(resp []byte) string {
+	var r struct {
+		Rules []crule `json:"rules"`
+	}
+	check(json.Unmarshal(resp, &r))
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	check(enc.Encode(r.Rules))
+	return hashOfRules(strings.TrimSuffix(b.String(), "\n"))
+}
+
+type env struct {
+	root string
+	s    *srv
+	tok  string
+	now  time.Time
+	log  []string
+}
+
+func writeConfig(root, text string) {
+	p := filepath.Join(root, ".kogen", "studio-rules.yaml")
+	check(os.MkdirAll(filepath.Dir(p), 0o755))
+	check(os.WriteFile(p, []byte(text), 0o644))
+}
+
+func newEnv(policy string) *env {
+	root, err := os.MkdirTemp("", "studio-rules-")
+	check(err)
+	e := &env{root: root, s: newSrv(), tok: token, now: time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)}
+	e.s.body = body(3)
+	e.config("kogen-shaping", policy)
+	return e
+}
+
+func (e *env) config(repo, policy string) {
+	writeConfig(e.root, fmt.Sprintf("version: 1\nurl: %s\nworkspace_id: optimum\nproduct_id: kogen\nrepo: %s\ntoken_env: %s\non_unavailable: %s\n", e.s.ts.URL, repo, tokenEnv, policy))
+}
+
+func (e *env) load() (*rules.Snapshot, error) {
+	return rules.Load(context.Background(), e.root, rules.Options{
+		Getenv: func(k string) string {
+			if k == tokenEnv {
+				return e.tok
+			}
+			return ""
+		},
+		Now: func() time.Time { return e.now },
+		Log: func(l string) { e.log = append(e.log, l) },
+	})
+}
+
+// seed loads live once, then moves the clock five minutes on, and returns the live content hash.
+func (e *env) seed() string {
+	s, err := e.load()
+	check(err)
+	if s.Origin != "live" {
+		check(errors.New("seed load was not live"))
+	}
+	e.now = e.now.Add(5 * time.Minute)
+	return s.ContentHash
+}
+
+func asAny(v any) any {
+	b, err := json.Marshal(v)
+	check(err)
+	var o any
+	check(json.Unmarshal(b, &o))
+	return o
+}
+
+func revs(s *rules.Snapshot) []string {
+	out := []string{}
+	for _, r := range s.Rules {
+		out = append(out, string(r.Revision))
+	}
+	return out
+}
+
+func short(s *rules.Snapshot, err error, wantHash string) map[string]any {
+	m := map[string]any{}
+	if s != nil {
+		m["origin"] = string(s.Origin)
+		m["fallback_reason"] = s.FallbackReason
+		m["same_hash"] = s.ContentHash == wantHash
+		m["retrieved_at"] = s.RetrievedAt.UTC().Format(time.RFC3339)
+		m["revisions"] = revs(s)
+		return m
+	}
+	m["snapshot"] = false
+	var re *rules.Error
+	switch {
+	case errors.As(err, &re):
+		m["error_class"] = re.Class
+		m["error_reason"] = re.Reason
+	case err != nil:
+		m["error_class"] = "other: " + err.Error()
+	default:
+		m["error_class"] = "none"
+	}
+	return m
+}
+
+func anyLog(lines []string, sub string) bool {
+	for _, l := range lines {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func cacheFiles(root string) []string {
+	entries, _ := os.ReadDir(filepath.Join(root, ".kogen", "local", "studio-rules"))
+	names := []string{}
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func cachePath(root string) string {
+	names := cacheFiles(root)
+	if len(names) != 1 {
+		check(fmt.Errorf("expected one cache file, found %v", names))
+	}
+	return filepath.Join(root, ".kogen", "local", "studio-rules", names[0])
+}
+
+func main() {
+	var out any
+	switch os.Getenv("DRIVER_CASE") {
+	case "live":
+		e := newEnv("hold")
+		s, err := e.load()
+		check(err)
+		r := e.s.reqs[0]
+		out = map[string]any{
+			"origin": string(s.Origin), "fallback_reason": s.FallbackReason, "authority": s.Authority,
+			"scope": asAny(s.Scope), "rules": asAny(s.Rules), "hash_ok": s.ContentHash == hashOfRules(rulesJSON(3)),
+			"retrieved_at": s.RetrievedAt.UTC().Format(time.RFC3339), "requests": len(e.s.reqs),
+			"method": r.method, "path": r.path, "query": r.query, "auth_ok": r.authOK,
+			"cache_files": len(cacheFiles(e.root)), "log_live": anyLog(e.log, "origin=live"),
+		}
+	case "unconfigured":
+		e := newEnv("hold")
+		check(os.Remove(filepath.Join(e.root, ".kogen", "studio-rules.yaml")))
+		s, err := e.load()
+		_, statErr := os.Stat(filepath.Join(e.root, ".kogen", "local", "studio-rules"))
+		out = map[string]any{"is_not_configured": s == nil && errors.Is(err, rules.ErrNotConfigured), "requests": len(e.s.reqs), "cache_dir_created": statErr == nil}
+	case "changed-revision":
+		e := newEnv("hold")
+		a, err := e.load()
+		check(err)
+		e.now = e.now.Add(5 * time.Minute)
+		e.s.body = body(4)
+		b, err := e.load()
+		check(err)
+		e.s.status = 503
+		c, err := e.load()
+		check(err)
+		out = map[string]any{
+			"first_revisions": revs(a), "second_revisions": revs(b), "second_origin": string(b.Origin),
+			"hash_changed": a.ContentHash != b.ContentHash, "outage_origin": string(c.Origin),
+			"outage_revisions": revs(c), "outage_same_hash_as_second": c.ContentHash == b.ContentHash,
+		}
+	case "cached-outage":
+		e := newEnv("hold")
+		h := e.seed()
+		e.s.status = 503
+		s1, err1 := e.load()
+		e.s.ts.Close()
+		s2, err2 := e.load()
+		out = map[string]any{
+			"live_hash_ok": h == hashOfRules(rulesJSON(3)), "http_503": short(s1, err1, h), "unreachable": short(s2, err2, h),
+			"log_cached_503": anyLog(e.log, "origin=cached") && anyLog(e.log, "fallback=http_503"),
+			"log_cached_unreachable": anyLog(e.log, "fallback=unreachable"),
+		}
+	case "wrong-scope":
+		e := newEnv("hold")
+		h := e.seed()
+		e.s.status = 503
+		e.config("kogen-build", "unavailable")
+		s1, err1 := e.load()
+		e.s.status = 0
+		s2, err2 := e.load()
+		e.s.status = 503
+		e.config("kogen-shaping", "hold")
+		s3, err3 := e.load()
+		out = map[string]any{
+			"other_scope_outage": short(s1, err1, h), "other_scope_mismatch": short(s2, err2, h),
+			"same_scope_outage": short(s3, err3, h), "cache_files": len(cacheFiles(e.root)),
+		}
+	case "refused":
+		e := newEnv("hold")
+		h := e.seed()
+		e.tok = wrongToken
+		s1, err1 := e.load()
+		e.tok = token
+		e.s.status = 403
+		s2, err2 := e.load()
+		e.tok = ""
+		e.s.status = 0
+		before := len(e.s.reqs)
+		s3, err3 := e.load()
+		out = map[string]any{
+			"invalid_token": short(s1, err1, h), "forbidden": short(s2, err2, h), "missing_token": short(s3, err3, h),
+			"missing_token_requests": len(e.s.reqs) - before, "cache_files": len(cacheFiles(e.root)),
+		}
+	case "absent-cache":
+		h := newEnv("hold")
+		h.s.ts.Close()
+		s1, err1 := h.load()
+		u := newEnv("unavailable")
+		u.s.ts.Close()
+		s2, err2 := u.load()
+		out = map[string]any{
+			"hold": short(s1, err1, ""), "unavailable": short(s2, err2, ""),
+			"log_hold": anyLog(h.log, "error=rules/hold"), "cache_files": len(cacheFiles(h.root)) + len(cacheFiles(u.root)),
+		}
+	case "malformed":
+		e := newEnv("hold")
+		h := e.seed()
+		bad := []struct{ name, body string }{
+			{"not-json", `not json`},
+			{"no-rules", `{"product":"kogen","repo":"kogen-shaping"}`},
+			{"missing-id", `{"product":"kogen","repo":"kogen-shaping","rules":[{"revision":1,"scope":"repo","topic":"t","text":"x","owner":"o","overrides":null}]}`},
+			{"duplicate-topic", `{"product":"kogen","repo":"kogen-shaping","rules":[{"id":"a","revision":1,"scope":"repo","topic":"tests","text":"x","owner":"o","overrides":null},{"id":"b","revision":2,"scope":"workspace","topic":"tests","text":"y","owner":"o","overrides":null}]}`},
+			{"wrong-repo", `{"product":"kogen","repo":"other","rules":[]}`},
+		}
+		cases := []any{}
+		for _, b := range bad {
+			e.s.body = b.body
+			s, err := e.load()
+			m := short(s, err, h)
+			m["name"] = b.name
+			cases = append(cases, m)
+		}
+		n := newEnv("hold")
+		n.s.body = "not json"
+		s, err := n.load()
+		out = map[string]any{"cases": cases, "no_cache": short(s, err, "")}
+	case "tamper":
+		e := newEnv("hold")
+		h := e.seed()
+		e.s.status = 503
+		p := cachePath(e.root)
+		orig, err := os.ReadFile(p)
+		check(err)
+		var m map[string]any
+		check(json.Unmarshal(orig, &m))
+		m["rules"].([]any)[0].(map[string]any)["text"] = "Edited."
+		b, _ := json.Marshal(m)
+		check(os.WriteFile(p, b, 0o644))
+		s1, err1 := e.load()
+		check(json.Unmarshal(orig, &m))
+		m["scope"].(map[string]any)["repo"] = "kogen-build"
+		b, _ = json.Marshal(m)
+		check(os.WriteFile(p, b, 0o644))
+		s2, err2 := e.load()
+		check(os.WriteFile(p, orig, 0o644))
+		s3, err3 := e.load()
+		out = map[string]any{"tampered_text": short(s1, err1, h), "foreign_scope": short(s2, err2, h), "restored": short(s3, err3, h)}
+	case "no-token-bytes":
+		e := newEnv("hold")
+		outs := []string{}
+		add := func(s *rules.Snapshot, err error) {
+			if err != nil {
+				outs = append(outs, "err:"+err.Error())
+			}
+			if s != nil {
+				b, _ := json.Marshal(s)
+				outs = append(outs, "snapshot:"+string(b))
+			}
+		}
+		add(e.load())
+		e.s.status = 503
+		add(e.load())
+		e.s.status = 0
+		e.s.body = "not json"
+		add(e.load())
+		e.s.body = body(3)
+		e.tok = wrongToken
+		add(e.load())
+		badRoot, err := os.MkdirTemp("", "studio-rules-cfg-")
+		check(err)
+		writeConfig(badRoot, "version: 1\nurl: http://127.0.0.1:1\nworkspace_id: optimum\nproduct_id: kogen\nrepo: kogen-shaping\ntoken_env: "+tokenEnv+"\non_unavailable: hold\ntoken: "+token+"\n")
+		_, cfgErr := rules.LoadConfig(badRoot)
+		add(nil, cfgErr)
+		for _, l := range e.log {
+			outs = append(outs, "log:"+l)
+		}
+		check(filepath.WalkDir(e.root, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				b, _ := os.ReadFile(p)
+				outs = append(outs, "file:"+p+"\n"+string(b))
+			}
+			return nil
+		}))
+		leaks := []string{}
+		kinds := map[string]bool{}
+		for _, o := range outs {
+			kind := strings.SplitN(o, ":", 2)[0]
+			kinds[kind] = true
+			if strings.Contains(o, token) || strings.Contains(o, wrongToken) {
+				leaks = append(leaks, kind)
+			}
+		}
+		scanned := []string{}
+		for k := range kinds {
+			scanned = append(scanned, k)
+		}
+		sort.Strings(scanned)
+		sent := false
+		for _, r := range e.s.reqs {
+			sent = sent || r.authOK
+		}
+		out = map[string]any{"leaks": leaks, "scanned_kinds": scanned, "token_sent": sent, "log_lines_with_origin": anyLog(e.log, "origin=")}
+	case "config":
+		valid := "version: 1\nurl: http://127.0.0.1:1\nworkspace_id: optimum\nproduct_id: kogen\nrepo: kogen-shaping\ntoken_env: " + tokenEnv + "\non_unavailable: hold\n"
+		emptyRoot, err := os.MkdirTemp("", "studio-rules-cfg-")
+		check(err)
+		_, absentErr := rules.LoadConfig(emptyRoot)
+		validRoot, err := os.MkdirTemp("", "studio-rules-cfg-")
+		check(err)
+		writeConfig(validRoot, valid)
+		cfg, err := rules.LoadConfig(validRoot)
+		check(err)
+		variants := []struct{ name, text, key string }{
+			{"token-key", valid + "token: " + token + "\n", "token"},
+			{"missing-token-env", strings.Replace(valid, "token_env: "+tokenEnv+"\n", "", 1), "token_env"},
+			{"bad-policy", strings.Replace(valid, "on_unavailable: hold", "on_unavailable: retry", 1), "on_unavailable"},
+			{"bad-url", strings.Replace(valid, "url: http://127.0.0.1:1", "url: ftp://studio", 1), "url"},
+			{"missing-repo", strings.Replace(valid, "repo: kogen-shaping\n", "", 1), "repo"},
+		}
+		invalid := []any{}
+		for _, v := range variants {
+			root, err := os.MkdirTemp("", "studio-rules-cfg-")
+			check(err)
+			writeConfig(root, v.text)
+			_, cerr := rules.LoadConfig(root)
+			class := "none"
+			var re *rules.Error
+			if errors.As(cerr, &re) {
+				class = re.Class
+			} else if cerr != nil {
+				class = "other"
+			}
+			text := ""
+			if cerr != nil {
+				text = cerr.Error()
+			}
+			invalid = append(invalid, map[string]any{"name": v.name, "class": class, "mentions_key": strings.Contains(text, v.key), "leaks_value": strings.Contains(text, token)})
+		}
+		out = map[string]any{
+			"absent_is_not_configured": errors.Is(absentErr, rules.ErrNotConfigured),
+			"valid":                    map[string]any{"workspace_id": cfg.WorkspaceID, "product_id": cfg.ProductID, "repo": cfg.Repo, "token_env": cfg.TokenEnv, "on_unavailable": cfg.OnUnavailable},
+			"invalid":                  invalid,
+		}
+	case "fixture":
+		dir := filepath.Join("rules", "testdata", "consumer")
+		resp, err := os.ReadFile(filepath.Join(dir, "response.json"))
+		check(err)
+		recorded, err := os.ReadFile(filepath.Join(dir, "snapshot.json"))
+		check(err)
+		var want any
+		check(json.Unmarshal(recorded, &want))
+		var top map[string]json.RawMessage
+		check(json.Unmarshal(resp, &top))
+		var arr []map[string]json.RawMessage
+		check(json.Unmarshal(top["rules"], &arr))
+		keys := func(m map[string]json.RawMessage) string {
+			k := []string{}
+			for name := range m {
+				k = append(k, name)
+			}
+			sort.Strings(k)
+			return strings.Join(k, ",")
+		}
+		shape := keys(top) == "product,repo,rules" && len(arr) > 0
+		for _, r := range arr {
+			shape = shape && keys(r) == "id,overrides,owner,revision,scope,text,topic"
+		}
+		e := newEnv("hold")
+		e.s.body = string(resp)
+		s, err := e.load()
+		check(err)
+		out = map[string]any{
+			"matches_recorded_snapshot": reflect.DeepEqual(asAny(s), want), "hash_ok": s.ContentHash == canonHash(resp),
+			"response_shape_ok": shape, "rule_count_positive": len(s.Rules) > 0, "origin": string(s.Origin),
+		}
+	default:
+		check(fmt.Errorf("unknown DRIVER_CASE %q", os.Getenv("DRIVER_CASE")))
+	}
+	b, err := json.Marshal(out)
+	check(err)
+	fmt.Println("RUN_RESULT=" + string(b))
+}

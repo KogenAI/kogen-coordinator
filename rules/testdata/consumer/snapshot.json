@@ -1,0 +1,41 @@
+{
+  "authority": "advisory",
+  "scope": {
+    "workspace_id": "optimum",
+    "product_id": "kogen",
+    "repo": "kogen-shaping"
+  },
+  "rules": [
+    {
+      "id": "rule-ws-1",
+      "revision": 3,
+      "scope": "workspace",
+      "topic": "tests",
+      "text": "Run the focused tests first.",
+      "owner": "almir",
+      "overrides": null
+    },
+    {
+      "id": "rule-prod-2",
+      "revision": "r5",
+      "scope": "product",
+      "topic": "style",
+      "text": "Prefer small, reviewable changes \u0026 keep \u003cdiffs\u003e focused.",
+      "owner": "team",
+      "overrides": "rule-ws-8"
+    },
+    {
+      "id": "rule-repo-4",
+      "revision": 7,
+      "scope": "repo",
+      "topic": "docs",
+      "text": "Update the README with every public change.",
+      "owner": "team",
+      "overrides": null
+    }
+  ],
+  "content_hash": "sha256:e4baa9d26f612eca7dac95a1a900d962b1fedaf135212222f0e4af87265ced81",
+  "retrieved_at": "2026-11-16T10:00:00Z",
+  "origin": "live",
+  "fallback_reason": ""
+}

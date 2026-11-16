@@ -47,6 +47,7 @@ Each item is asserted so that changing it fails the suite.
 - `approval-path` and `approval-json`, `TestApprovalPathAndJSON`: the approval file's path and exact bytes, and its round trip.
 - `hash-line`, `TestHashIsTheDigestOfPathDigestLines`: the approval hash is recomputed with `crypto/sha256`.
 - `baseline-order` and `protect-glob`, `TestBaselineOrderAndProtectGlobs`: the order of the baseline and the `protect` patterns; `.kogen/models.yaml` is listed (right after `.kogen/project.yaml`) only when the project has it or a `protect` pattern lists it.
+- `rules-api` and `rules-fixture`, `TestRulesAPI` and `TestRulesConsumerFixture`: the exported API of package `rules` (`ConfigPath`, `RequestTimeout`, `LoadConfig`, `Load`, `Options`, `Snapshot` and its JSON tags, `Rule`, `Error` classes) and the offline consumer fixture `rules/testdata/consumer/{response,snapshot}.json`.
 - `intent-paths`, `TestIntentPaths`: the paths under `.kogen/intents/<slug>`.
 - `build-edits`, `TestBuildEditsLeaveOutTheApprovedIntent`: `project.OwnedByIntent` (under `.kogen/intents/<slug>/` or `.kogen/models/<slug>/`, byte-exact prefix) and `project.BuildEdits`, a Build's edit list: the tree diff in order without the approved Intent's own paths.
 - `model-line` and `model-none`, `TestParseModelSpec`: the Model line.

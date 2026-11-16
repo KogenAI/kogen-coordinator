@@ -12,6 +12,7 @@ It is a component of [Kogen](https://github.com/KogenAI/kogen), which pins an ex
 - `route`: the outer routing of a Build's candidate through its phases (verify, independent review with its repairs, the implementer's repair of a red candidate, commit) and the resume of a Build stopped at one of those steps. The phases are reached through narrow interfaces (`route.Steps`); each keeps its own policies and state.
 - `contract`: the contract suite: what kogen-coordinator's consumers (kogen, kogen-executor, kogen-verification, kogen-shaping, kogen-review, kogen-build) use, pinned in tests that run in `go test ./...`: the exported API they call, the behaviours they rely on and the file and wire formats they read or write. An intended interface change edits it together with paired consumer items. See [contract/](contract/).
 
+- `rules`: scoped Studio rule snapshots (see [Studio rule snapshots](#studio-rule-snapshots)).
 - `consumes/kogen-loop`: the coordinator’s consumer contract for its pinned kogen-loop dependency; see the [suite and use inventory](consumes/kogen-loop/README.md).
 
 ## Opt-in model lineup API
@@ -75,6 +76,43 @@ files the roles are the team file's over the defaults; without the team file the
   `read <root>/.kogen/project.yaml: <operating-system error>`.
 - The local files are not in the approval baseline, so changing them never changes an approval
   hash. Neither they nor the committed configuration are ever written.
+
+## Studio rule snapshots
+
+Package `rules` (`github.com/KogenAI/kogen-coordinator/rules`) is the one producer of a scoped
+Studio rule snapshot, so Shape, Build and Review call `rules.LoadConfig` and `rules.Load` instead of
+each implementing authentication, caching and precedence. Wiring those consumers is their own work.
+
+- Configuration: the committed team file `.kogen/studio-rules.yaml` (`rules.ConfigPath`) with exactly
+  these keys, all required, `version: 1` first: `url` (http or https base URL of Studio),
+  `workspace_id`, `product_id`, `repo`, `token_env` and `on_unavailable` (`hold` or `unavailable`).
+  `token_env` is the NAME of an operator-provisioned environment variable, a secret reference: no
+  credential is stored in the file, in the cache or in any log, and a `token` key is an unknown key.
+  Invalid configuration is `environment/project_config_invalid` naming the file and the key, never
+  the value. A project without the file is unconfigured: `rules.Load` returns
+  `rules.ErrNotConfigured`, makes no request and writes nothing, and execution stays standalone.
+  `.kogen/project.yaml`, `project.LoadConfig`, the approval baseline and the goldens are unchanged.
+- Loading: `rules.Load(ctx, root, rules.Options{})` always asks Studio first, so a changed revision
+  affects the next load. The `Snapshot` carries rule ids and revisions, the scope, a content hash,
+  the retrieval time, `origin` (`live` or `cached`) and the `fallback_reason`. Its `authority` is
+  always `advisory`: rule text is data and cannot approve, skip checks or change protected paths.
+  The default HTTP client times out after `rules.RequestTimeout` (10 seconds).
+- Cache: each valid live response is written to
+  `.kogen/local/studio-rules/<sha256 of workspace_id, product_id and repo joined with NUL>.json`
+  (inside the ignored `.kogen/local/`). A cache is used only after an outage and only if it parses,
+  has exactly the configured scope and its recomputed content hash matches.
+- Failure classes: an outage (`unreachable`, `http_5xx`, `malformed_response`) returns the verified
+  same-scope cache as origin `cached` with the reason, or else `rules/hold` or `rules/unavailable`
+  by `on_unavailable`. An invalid token, a denial (any HTTP 4xx) or a missing token variable
+  (`token_missing`, no request made) is `rules/refused` and never reads the cache.
+- Read contract: the Studio read `studio_workflow rules {workspace_id,product_id,repo}` or
+  authenticated `GET /api/rules?workspace_id=W&product_id=P&repo=R` with
+  `Authorization: Bearer TOKEN`, returning `{product,repo,rules}` with rules
+  `{id,revision,scope,topic,text,owner,overrides}`. Studio source
+  `d105f3cbf6d68daebfc473bdb032a81d2ec7bc0c`, `README.md line 1702`.
+- Offline consumer fixture: `rules/testdata/consumer/response.json` and `snapshot.json`, pinned by
+  `contract/rules_test.go`.
+- Live credentials and their provisioning stay with their existing owner; this package stores none.
 
 ## Git command deadlines
 
