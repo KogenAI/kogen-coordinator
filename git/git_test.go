@@ -445,3 +445,110 @@ func TestIgnoredByteExactAndFailures(t *testing.T) {
 		t.Fatalf("unavailable Git: %q, %v", got, err)
 	}
 }
+
+func refusedAs(t *testing.T, f *fixture, want string, args ...string) {
+	t.Helper()
+	for name, run := range map[string]func() error{
+		"Run": func() error { _, err := f.Run(args...); return err },
+		"OK":  func() error { _, err := f.OK(args...); return err },
+	} {
+		err := run()
+		if !errors.Is(err, ErrForbidden) || err.Error() != "git command not allowed: git "+want {
+			t.Errorf("%s git %v: error = %v, want git command not allowed: git %s", name, args, err, want)
+		}
+	}
+}
+
+func TestRunnerRefusesForbiddenCommandAfterValueTakingOption(t *testing.T) {
+	f := newFixture(t)
+	head := f.Head()
+	refusedAs(t, f, "push", "--config-env", "alias.p=NAMEDVAR", "push")
+	refusedAs(t, f, "reset", "--super-prefix", "x/", "reset", "--hard")
+	equal(t, "head unchanged", f.Head(), head)
+}
+
+func TestRunnerRefusesAliasOfForbiddenCommand(t *testing.T) {
+	f := newFixture(t)
+	f.write(t, "README.md", "edited\n")
+	f.write(t, "scratch.txt", "x\n")
+	refusedAs(t, f, "reset", "-c", "alias.p=reset --hard", "p")
+	refusedAs(t, f, "reset", "-c", "alias.p=reset --hard", "p", "-q")
+	f.configure(t, "alias.p", "push origin")
+	refusedAs(t, f, "push", "p")
+	// An alias defined by --config-env reads the variable from the call's environment.
+	if _, err := f.RunEnv([]string{"QV=stash"}, "--config-env", "alias.q=QV", "q"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("config-env alias: error = %v", err)
+	}
+	// The last definition of a name wins.
+	if out, err := f.OK("-c", "alias.p=reset --hard", "-c", "alias.p=log -1 --format=%s", "p"); err != nil || strings.TrimSpace(out) != "baseline" {
+		t.Errorf("last definition: %q, %v", out, err)
+	}
+	equal(t, "edit kept", f.git(t, "status", "--porcelain"), " M README.md\n?? scratch.txt\n")
+}
+
+func TestRunnerRefusesShellAlias(t *testing.T) {
+	f := newFixture(t)
+	f.configure(t, "alias.s", "!echo ran > shell-ran.txt")
+	refusedAs(t, f, "s", "s")
+	if _, err := os.Stat(filepath.Join(f.Dir, "shell-ran.txt")); err == nil {
+		t.Error("the shell alias ran")
+	}
+	// A chain longer than 5 expansions is refused naming the called name.
+	f.configure(t, "alias.c1", "c2")
+	f.configure(t, "alias.c2", "c3")
+	f.configure(t, "alias.c3", "c4")
+	f.configure(t, "alias.c4", "c5")
+	f.configure(t, "alias.c5", "log -1 --format=%s")
+	f.configure(t, "alias.d1", "c1")
+	if out, err := f.OK("c1"); err != nil || strings.TrimSpace(out) != "baseline" {
+		t.Errorf("chain of 5: %q, %v", out, err)
+	}
+	refusedAs(t, f, "d1", "d1")
+}
+
+func TestRunnerLetsAliasShadowingABuiltinThrough(t *testing.T) {
+	f := newFixture(t)
+	f.configure(t, "alias.status", "push")
+	out, err := f.OK("status", "--porcelain")
+	if err != nil || out != "" {
+		t.Errorf("status = %q, %v", out, err)
+	}
+}
+
+func TestRunnerRefusesMovingHeadCommands(t *testing.T) {
+	f := newFixture(t)
+	f.write(t, "README.md", "edited\n")
+	f.write(t, "scratch.txt", "x\n")
+	refusedAs(t, f, "symbolic-ref", "symbolic-ref", "HEAD", "refs/heads/x")
+	refusedAs(t, f, "restore", "restore", "--", "README.md")
+	refusedAs(t, f, "clean", "clean", "-fd")
+	refusedAs(t, f, "worktree", "worktree", "add", "../w")
+	refusedAs(t, f, "remote", "remote", "add", "o", "u")
+	equal(t, "work tree kept", f.git(t, "status", "--porcelain"), " M README.md\n?? scratch.txt\n")
+	equal(t, "no remote", f.git(t, "remote"), "")
+}
+
+func TestRunnerKeepsOrdinaryCallsWorking(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []struct {
+		want string
+		args []string
+	}{
+		{"", []string{"-c", "core.quotepath=off", "status", "--porcelain"}},
+		{f.Dir, []string{"rev-parse", "--show-toplevel"}},
+		{"baseline", []string{"log", "-1", "--format=%s"}},
+	} {
+		out, err := f.OK(c.args...)
+		if err != nil {
+			t.Errorf("git %v: %v", c.args, err)
+			continue
+		}
+		if c.want == f.Dir {
+			if physical(strings.TrimSpace(out)) != physical(c.want) {
+				t.Errorf("git %v = %q", c.args, out)
+			}
+		} else if strings.TrimSpace(out) != c.want {
+			t.Errorf("git %v = %q, want %q", c.args, out, c.want)
+		}
+	}
+}

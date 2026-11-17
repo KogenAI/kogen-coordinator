@@ -7,8 +7,12 @@
 // locate a repository (GIT_DIR, GIT_INDEX_FILE, ...) from the inherited environment, keeps
 // stderr apart from the output it parses, and refuses revisions that look like options.
 // The runner also refuses the Git commands Kogen never uses: nothing here pushes, fetches,
-// rebases, merges, amends, stashes or switches branches (GIT-7). The only operations that
-// move HEAD are Repo.Commit and its undo.
+// rebases, merges, amends, stashes or switches branches (GIT-7), nor moves HEAD or discards
+// work with symbolic-ref, restore, clean, worktree or remote. The guard judges the command
+// Git would run: it skips the value of every global option that takes one and follows
+// aliases (from the call's own -c and --config-env options, else from the repository's
+// configuration) up to 5 expansions deep; a shell alias (starting with "!") is refused. The
+// only operations that move HEAD are Repo.Commit and its undo.
 package git
 
 import (
@@ -23,6 +27,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -150,21 +155,232 @@ var forbidden = map[string]bool{
 	"push": true, "fetch": true, "pull": true, "rebase": true, "merge": true,
 	"cherry-pick": true, "revert": true, "am": true, "stash": true, "switch": true,
 	"checkout": true, "reset": true, "commit": true, "update-ref": true,
-	"filter-branch": true, "replace": true,
+	"filter-branch": true, "replace": true, "symbolic-ref": true, "restore": true,
+	"clean": true, "worktree": true, "remote": true,
 }
 
-func subcommand(args []string) string {
+// maxAliasDepth is how many alias expansions the guard follows.
+const maxAliasDepth = 5
+
+// valueOptions are the global options whose value is the next word.
+var valueOptions = map[string]bool{
+	"-c": true, "-C": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
+	"--config-env": true, "--super-prefix": true,
+}
+
+// commandIndex is the index of the command word of args, or -1 when there is none.
+func commandIndex(args []string) int {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-c" || a == "-C" || a == "--git-dir" || a == "--work-tree" || a == "--namespace":
+		case valueOptions[a]:
 			i++
 		case strings.HasPrefix(a, "-"):
 		default:
-			return a
+			return i
 		}
 	}
+	return -1
+}
+
+func subcommand(args []string) string {
+	if i := commandIndex(args); i >= 0 {
+		return args[i]
+	}
 	return ""
+}
+
+// aliasName is the lower-cased alias name of a configuration key, if it is an alias key.
+func aliasName(key string) (string, bool) {
+	if len(key) > len("alias.") && strings.EqualFold(key[:len("alias.")], "alias.") {
+		return strings.ToLower(key[len("alias."):]), true
+	}
+	return "", false
+}
+
+func lookupEnv(env []string, name string) (string, bool) {
+	value, found := "", false
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == name {
+			value, found = v, true
+		}
+	}
+	return value, found
+}
+
+// optionAliases adds to defs the aliases that the global options before the command word of
+// args define (-c alias.NAME=VALUE, --config-env alias.NAME=ENVVAR); the last one wins.
+func optionAliases(defs map[string]string, args []string, env []string) {
+	end := commandIndex(args)
+	if end < 0 {
+		end = len(args)
+	}
+	for i := 0; i < end; i++ {
+		a := args[i]
+		var def string
+		switch {
+		case a == "-c" && i+1 < end:
+			i++
+			key, value, _ := strings.Cut(args[i], "=")
+			if name, ok := aliasName(key); ok {
+				defs[name] = value
+			}
+			continue
+		case a == "--config-env" && i+1 < end:
+			i++
+			def = args[i]
+		case strings.HasPrefix(a, "--config-env="):
+			def = strings.TrimPrefix(a, "--config-env=")
+		default:
+			if valueOptions[a] {
+				i++
+			}
+			continue
+		}
+		key, envName, _ := strings.Cut(def, "=")
+		if name, ok := aliasName(key); ok {
+			defs[name], _ = lookupEnv(env, envName)
+		}
+	}
+}
+
+// repoOptions are the global options of args that choose the repository.
+func repoOptions(args []string) []string {
+	end := commandIndex(args)
+	if end < 0 {
+		end = len(args)
+	}
+	var out []string
+	for i := 0; i < end; i++ {
+		a := args[i]
+		switch {
+		case (a == "-C" || a == "--git-dir" || a == "--work-tree") && i+1 < end:
+			out = append(out, a, args[i+1])
+			i++
+		case strings.HasPrefix(a, "--git-dir=") || strings.HasPrefix(a, "--work-tree="):
+			out = append(out, a)
+		case valueOptions[a]:
+			i++
+		}
+	}
+	return out
+}
+
+// splitAlias splits an alias value into words the way Git does: blanks separate words,
+// single and double quotes group, a backslash escapes the next character outside single quotes.
+func splitAlias(s string) []string {
+	var words []string
+	var cur strings.Builder
+	inWord := false
+	var quote rune
+	escaped := false
+	for _, c := range s {
+		switch {
+		case escaped:
+			cur.WriteRune(c)
+			escaped = false
+		case quote != 0 && c == quote:
+			quote = 0
+		case quote != '\'' && c == '\\':
+			escaped, inWord = true, true
+		case quote != 0:
+			cur.WriteRune(c)
+		case c == '"' || c == '\'':
+			quote, inWord = c, true
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f':
+			if inWord {
+				words = append(words, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+var (
+	builtinsMu    sync.Mutex
+	builtinsByGit = map[string]map[string]bool{}
+)
+
+// isBuiltin is true for a command Git implements itself (git --list-cmds=builtins); Git
+// ignores an alias with such a name.
+func (r *Repo) isBuiltin(name string) (bool, error) {
+	bin := r.gitBinary()
+	builtinsMu.Lock()
+	defer builtinsMu.Unlock()
+	set, ok := builtinsByGit[bin]
+	if !ok {
+		out, err := r.ok(nil, "--list-cmds=builtins")
+		if err != nil {
+			return false, err
+		}
+		set = map[string]bool{}
+		for _, l := range strings.Split(out, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				set[l] = true
+			}
+		}
+		builtinsByGit[bin] = set
+	}
+	return set[name], nil
+}
+
+// alias is the alias name defines: from the call's options, else from the configuration.
+func (r *Repo) alias(name string, defs map[string]string, extra, repoOpts []string) (string, bool, error) {
+	if v, ok := defs[strings.ToLower(name)]; ok {
+		return v, true, nil
+	}
+	args := append(slices.Clone(repoOpts), "config", "--get", "alias."+name)
+	res, err := r.exec(r.Dir, extra, nil, nil, args...)
+	if err != nil {
+		return "", false, err
+	}
+	if res.Status != 0 {
+		return "", false, nil
+	}
+	return strings.TrimSuffix(res.Stdout, "\n"), true, nil
+}
+
+// judge returns the forbidden command that Git would run for args, or "" when the call is
+// allowed. A shell alias or a chain deeper than maxAliasDepth is judged as the called name.
+func (r *Repo) judge(extra []string, args []string) (string, error) {
+	called := subcommand(args)
+	if forbidden[called] {
+		return called, nil
+	}
+	env := r.environ(extra)
+	repoOpts := repoOptions(args)
+	defs := map[string]string{}
+	words := args
+	for depth := 0; ; depth++ {
+		optionAliases(defs, words, env)
+		name := subcommand(words)
+		switch {
+		case forbidden[name]:
+			return name, nil
+		case name == "":
+			return "", nil
+		}
+		builtin, err := r.isBuiltin(name)
+		if err != nil || builtin {
+			return "", err
+		}
+		value, ok, err := r.alias(name, defs, extra, repoOpts)
+		if err != nil || !ok {
+			return "", err
+		}
+		if depth == maxAliasDepth || strings.HasPrefix(value, "!") {
+			return called, nil
+		}
+		words = splitAlias(value)
+	}
 }
 
 func checkRev(rev string) error {
@@ -180,7 +396,11 @@ func (r *Repo) Run(args ...string) (Result, error) { return r.RunEnv(nil, args..
 
 // RunEnv is Run with extra KEY=VALUE variables, which win over the base environment.
 func (r *Repo) RunEnv(extra []string, args ...string) (Result, error) {
-	if sub := subcommand(args); forbidden[sub] {
+	sub, err := r.judge(extra, args)
+	if err != nil {
+		return Result{Status: -1}, err
+	}
+	if sub != "" {
 		return Result{Status: -1}, fmt.Errorf("%w: git %s", ErrForbidden, sub)
 	}
 	return r.exec(r.Dir, extra, nil, nil, args...)

@@ -130,7 +130,13 @@ func TestProjectGitCallsUseRepositoryLayerGitAndCleanEnv(t *testing.T) {
 		"rev-parse --show-toplevel|GIT_DIR=|GIT_INDEX_FILE=",
 		"config --get user.name|GIT_DIR=|GIT_INDEX_FILE=",
 	}
-	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var got []string
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		// The runner's guard lists Git's built-in commands once per Git binary.
+		if !strings.HasPrefix(l, "--list-cmds=builtins|") {
+			got = append(got, l)
+		}
+	}
 	if len(got) < len(want) || !slices.Equal(got[:len(want)], want) {
 		t.Fatalf("git log:\n%s\nwant prefix:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}

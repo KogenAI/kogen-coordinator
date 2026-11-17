@@ -19,7 +19,8 @@ const (
 
 // hangingGit is a fake git for a Repo's PATH. In mode "hang" (or in "hang-blobs" for
 // cat-file only) it echoes its environment to stderr, records its pid and the pid of a
-// background sleep in $FAKE_PIDS and waits for it; otherwise it runs the real git.
+// background sleep in $FAKE_PIDS and waits for it; otherwise it runs the real git. The
+// runner's own listing of Git's built-in commands always runs the real git.
 const hangingGit = `#!/bin/sh
 hang() {
   printf '%s %s\n' "$GIT_AUTHOR_NAME" "$DEADLINE_SECRET" >&2
@@ -29,6 +30,9 @@ hang() {
   wait
   exit 0
 }
+for a in "$@"; do
+  if [ "$a" = --list-cmds=builtins ]; then exec "$REAL_GIT" "$@"; fi
+done
 case "$FAKE_MODE" in
 hang) hang ;;
 hang-blobs) if [ "$1" = cat-file ]; then hang; fi ;;
