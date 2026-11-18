@@ -18,6 +18,7 @@ type fake struct {
 	reviewErr  error  // the error of every Review and Continue
 	verifyErr  error  // the error of every Verify
 	continuing bool   // Continuable
+	driftAll   bool   // every Commit with restart drifts
 	refuse     bool   // a drift with restart false
 	pass       int    // Verify calls so far
 	cancelIn   string // the trace prefix of the step call that cancels the run ("" for none)
@@ -75,7 +76,7 @@ func (f *fake) Commit(_ context.Context, approval string, restart bool) (bool, e
 		}
 		return false, nil
 	}
-	drift := len(f.drifts) > 0 && f.drifts[0]
+	drift := f.driftAll || len(f.drifts) > 0 && f.drifts[0]
 	if len(f.drifts) > 0 {
 		f.drifts = f.drifts[1:]
 	}
@@ -180,6 +181,75 @@ func TestResumedApprovalWhoseCandidateDriftedMustLand(t *testing.T) {
 	if err == nil || err.Error() != "candidate changed after review in a resumed commit: fix it" {
 		t.Fatal(err)
 	}
+}
+
+const driftLimitError = "candidate changed after review 3 times before the commit; the last verification evidence is kept"
+
+func count(f *fake, prefix string) int {
+	n := 0
+	for _, line := range f.trace {
+		if strings.HasPrefix(line, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestCycleStopsAfterThreeDriftedApprovals(t *testing.T) {
+	f := &fake{passes: []bool{true, true, true, true}, driftAll: true}
+	feedback, landed, err := Cycle(context.Background(), f, true)
+	if err == nil || err.Error() != driftLimitError || landed || feedback != "" {
+		t.Fatalf("%q %v %v", feedback, landed, err)
+	}
+	check(t, f, "verify builder=yes", "review green", "commit approved green",
+		"verify builder=no", "review green", "commit approved green",
+		"verify builder=no", "review green", "commit approved green")
+}
+
+func TestCycleLandsAfterTwoDrifts(t *testing.T) {
+	f := &fake{passes: []bool{true, true, true}, drifts: []bool{true, true, false}}
+	feedback, landed, err := Cycle(context.Background(), f, true)
+	if err != nil || !landed || feedback != "" {
+		t.Fatalf("%q %v %v", feedback, landed, err)
+	}
+	check(t, f, "verify builder=yes", "review green", "commit approved green",
+		"verify builder=no", "review green", "commit approved green",
+		"verify builder=no", "review green", "commit approved green")
+}
+
+func TestCycleDriftCountResetsPerCall(t *testing.T) {
+	f := &fake{passes: []bool{true, true, true, true, true, true}, drifts: []bool{true, true, false, true, true, false}}
+	for i := 0; i < 2; i++ {
+		if _, landed, err := Cycle(context.Background(), f, true); err != nil || !landed {
+			t.Fatalf("call %d: %v %v", i, landed, err)
+		}
+	}
+	if n := count(f, "verify"); n != 6 {
+		t.Fatalf("%d verifications", n)
+	}
+}
+
+func TestResumeCountsItsFirstDrift(t *testing.T) {
+	f := &fake{continuing: true, passes: []bool{true, true, true}, driftAll: true}
+	err := Resume(context.Background(), f, StageReview)
+	if err == nil || err.Error() != driftLimitError {
+		t.Fatal(err)
+	}
+	check(t, f, "continue", "commit approved saved",
+		"verify builder=no", "review green", "commit approved green",
+		"verify builder=no", "review green", "commit approved green")
+	if n := count(f, "commit"); n != 3 {
+		t.Fatalf("%d commits", n)
+	}
+}
+
+func TestCycleDriftThenCancelKeepsCancellationError(t *testing.T) {
+	f, ctx := cancelling(&fake{passes: []bool{true, true}, driftAll: true}, "commit")
+	feedback, landed, err := Cycle(ctx, f, true)
+	if err != context.Canceled || landed || feedback != "" {
+		t.Fatalf("%q %v %v", feedback, landed, err)
+	}
+	check(t, f, "verify builder=yes", "review green", "commit approved green")
 }
 
 func TestStagesAreThePersistedNames(t *testing.T) {

@@ -66,7 +66,19 @@ type Steps[E, A any] interface {
 // starts the cycle over with a fresh verification. The context is checked between steps: before
 // each Verify, Review and Commit a cancelled context ends the cycle with its error (unwrapped) and
 // no further step starts; a step already running is never interrupted.
+//
+// The drifted approvals of one call are counted: the MaxDriftRestarts-th ends the cycle with an
+// error and no further verification starts.
 func Cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool) (feedback string, landed bool, err error) {
+	return cycle(ctx, s, builderPass, 0)
+}
+
+// MaxDriftRestarts is the number of drifted approvals (a candidate that changed between its
+// approval and its commit) after which a cycle stops instead of verifying and reviewing again.
+const MaxDriftRestarts = 3
+
+// cycle is Cycle with the drifted approvals already counted by its caller.
+func cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool, drifts int) (string, bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", false, err
@@ -94,6 +106,10 @@ func Cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool) (feed
 		}
 		if !drifted {
 			return "", true, nil
+		}
+		drifts++
+		if drifts >= MaxDriftRestarts {
+			return "", false, fmt.Errorf("candidate changed after review %d times before the commit; the last verification evidence is kept", MaxDriftRestarts)
 		}
 		builderPass = false
 	}
@@ -152,7 +168,7 @@ func Resume[E, A any](ctx context.Context, s Steps[E, A], stage string) error {
 	if err != nil || !drifted {
 		return err
 	}
-	feedback, landed, err := Cycle(ctx, s, false)
+	feedback, landed, err := cycle(ctx, s, false, 1)
 	if err != nil {
 		return err
 	}
