@@ -268,6 +268,93 @@ func TestUnreachable(t *testing.T) {
 	}
 }
 
+func (f *fx) loadCtx(ctx context.Context) (*rules.Snapshot, error) {
+	return rules.Load(ctx, f.root, rules.Options{Getenv: func(string) string { return f.tok }})
+}
+
+func notRulesError(t *testing.T, err error) {
+	t.Helper()
+	var e *rules.Error
+	if errors.As(err, &e) {
+		t.Fatalf("context error converted to a rules failure class: %v", err)
+	}
+}
+
+func TestCancelledContextReturnsContextError(t *testing.T) {
+	f := newFx(t, "hold")
+	if _, err := f.load(); err != nil {
+		t.Fatal(err)
+	}
+	before := f.reqs
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s, err := f.loadCtx(ctx)
+	if err != context.Canceled || s != nil || err.Error() != "context canceled" {
+		t.Fatalf("got %+v %v", s, err)
+	}
+	notRulesError(t, err)
+	if f.reqs != before {
+		t.Fatalf("requests after cancel: %d", f.reqs-before)
+	}
+}
+
+func TestExpiredDeadlineReturnsContextError(t *testing.T) {
+	f := newFx(t, "hold")
+	if _, err := f.load(); err != nil {
+		t.Fatal(err)
+	}
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer blocked.Close()
+	f.config(strings.Replace(readConfig(t, f), f.ts.URL, blocked.URL, 1))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	s, err := f.loadCtx(ctx)
+	if err != context.DeadlineExceeded || s != nil || err.Error() != "context deadline exceeded" {
+		t.Fatalf("got %+v %v", s, err)
+	}
+	notRulesError(t, err)
+}
+
+func TestCancelledDuringRequestReturnsContextError(t *testing.T) {
+	f := newFx(t, "hold")
+	if _, err := f.load(); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+	}))
+	defer blocked.Close()
+	f.config(strings.Replace(readConfig(t, f), f.ts.URL, blocked.URL, 1))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-entered
+		cancel()
+	}()
+	s, err := f.loadCtx(ctx)
+	if err != context.Canceled || s != nil {
+		t.Fatalf("got %+v %v", s, err)
+	}
+	notRulesError(t, err)
+}
+
+func TestNetworkOutageWithLiveContextKeepsCache(t *testing.T) {
+	f := newFx(t, "hold")
+	live, err := f.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ts.Close()
+	c, err := f.loadCtx(context.Background())
+	if err != nil || c.Origin != rules.Cached || c.FallbackReason != "unreachable" || c.ContentHash != live.ContentHash {
+		t.Fatalf("cached: %+v %v", c, err)
+	}
+}
+
 func TestCacheVerifiesRawRevisionAndOverridesWithHTMLCharacters(t *testing.T) {
 	f := newFx(t, "hold")
 	f.body = `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":"r&5","scope":"repo","topic":"t","text":"x","owner":"o","overrides":"a<b"}]}`

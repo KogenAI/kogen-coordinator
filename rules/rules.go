@@ -71,7 +71,8 @@ type Snapshot struct {
 }
 
 // Load returns the rule snapshot of the project's configured scope. It always asks Studio first;
-// only an outage falls back to the last verified snapshot of the same scope.
+// only an outage falls back to the last verified snapshot of the same scope. A cancelled context or
+// an expired deadline returns ctx.Err() itself, with no snapshot, no cache use and no *Error.
 func Load(ctx context.Context, root string, opts Options) (*Snapshot, error) {
 	cfg, err := LoadConfig(root)
 	if err != nil {
@@ -99,7 +100,17 @@ func Load(ctx context.Context, root string, opts Options) (*Snapshot, error) {
 		return nil, fail(opts, &Error{Class: ClassRefused, Reason: "token_missing"})
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	rules, reason, refused := fetch(ctx, client, cfg, token)
+	if reason == "unreachable" {
+		// A request whose context ended is not an outage: return the context error itself,
+		// without the cache and without a failure class.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if refused != nil {
 		return nil, fail(opts, refused)
 	}
