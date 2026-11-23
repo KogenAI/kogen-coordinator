@@ -251,7 +251,7 @@ func ApprovalPath(root, slug string) string {
 }
 
 // ReadApproval reads the approval of an Intent: nil without an error when there is none, an error
-// when the file cannot be read or is not an approval.
+// when the file cannot be read, is not an approval, or records another Intent's slug.
 func ReadApproval(root, slug string) (*Approval, error) {
 	b, err := os.ReadFile(ApprovalPath(root, slug))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -263,6 +263,9 @@ func ReadApproval(root, slug string) (*Approval, error) {
 	var a Approval
 	if err := json.Unmarshal(b, &a); err != nil {
 		return nil, fmt.Errorf("approval %s: %w", slug, err)
+	}
+	if a.Slug != slug {
+		return nil, fmt.Errorf("approval %s records slug %q, not %q", slug, a.Slug, slug)
 	}
 	return &a, nil
 }

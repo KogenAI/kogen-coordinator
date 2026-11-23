@@ -718,6 +718,11 @@ func TestApprovalFiles(t *testing.T) {
 	if a, err := ReadApproval(root, "g-h"); err != nil || a.SourceProvenance != nil || a.SHA256 != "" {
 		t.Errorf("approval without provenance: %+v %v", a, err)
 	}
+	writeFile(t, root, ".kogen/local/approvals/requested-slug.json", `{"slug":"recorded-slug","sha256":"h1"}`+"\n")
+	a, err := ReadApproval(root, "requested-slug")
+	if a != nil || err == nil || !strings.Contains(err.Error(), "requested-slug") || !strings.Contains(err.Error(), "recorded-slug") {
+		t.Errorf("approval recorded for another slug: %+v %v", a, err)
+	}
 }
 
 func TestGraphemeLen(t *testing.T) {
