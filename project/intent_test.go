@@ -1147,3 +1147,71 @@ func TestParseIntentIgnoresOneLeadingBOM(t *testing.T) {
 		t.Errorf("middle BOM Title = %q", i.Title)
 	}
 }
+
+func TestFetchConfinesReadsToRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	for path, body := range map[string]string{
+		filepath.Join(outside, "secret.txt"):   "outside-secret",
+		filepath.Join(root, "a", "b", "c.txt"): "disk-content",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{
+		"escape-dir":  outside,
+		"escape-file": filepath.Join(outside, "secret.txt"),
+		"inside-link": "a",
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootLink := filepath.Join(base, "root-link")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Fatal(err)
+	}
+	leak := map[string][]byte{"../outside/secret.txt": []byte("overlay-leak")}
+	for _, c := range []struct {
+		name, root, rel string
+		overlay         map[string][]byte
+		want            string
+		wantErr         bool
+	}{
+		{name: "parent", root: root, rel: "../outside/secret.txt", wantErr: true},
+		{name: "nested parent", root: root, rel: "a/../../outside/secret.txt", wantErr: true},
+		{name: "absolute", root: root, rel: filepath.Join(outside, "secret.txt"), wantErr: true},
+		{name: "empty", root: root, rel: "", wantErr: true},
+		{name: "dot", root: root, rel: "a/./b/c.txt", wantErr: true},
+		{name: "empty component", root: root, rel: "a//b/c.txt", wantErr: true},
+		{name: "symlink dir", root: root, rel: "escape-dir/secret.txt", wantErr: true},
+		{name: "symlink file", root: root, rel: "escape-file", wantErr: true},
+		{name: "nested", root: root, rel: "a/b/c.txt", want: "disk-content"},
+		{name: "inside symlink", root: root, rel: "inside-link/b/c.txt", want: "disk-content"},
+		{name: "symlinked root", root: rootLink, rel: "a/b/c.txt", want: "disk-content"},
+		{name: "overlay over disk", root: root, rel: "a/b/c.txt", overlay: map[string][]byte{"a/b/c.txt": []byte("overlay-content")}, want: "overlay-content"},
+		{name: "overlay only", root: root, rel: "new/f.txt", overlay: map[string][]byte{"new/f.txt": []byte("overlay-only")}, want: "overlay-only"},
+		{name: "overlay unclean key", root: root, rel: "../outside/secret.txt", overlay: leak, wantErr: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Fetch(c.root, c.overlay, c.rel)
+			if c.wantErr {
+				if err == nil || got != nil {
+					t.Fatalf("Fetch = %q, %v; want nil and an error", got, err)
+				}
+				return
+			}
+			if err != nil || string(got) != c.want {
+				t.Fatalf("Fetch = %q, %v; want %q", got, err, c.want)
+			}
+		})
+	}
+	if _, err := Fetch(root, nil, "missing.txt"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing file error = %v, want not-exist", err)
+	}
+}

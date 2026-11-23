@@ -130,12 +130,44 @@ func editDistance(a, b string) int {
 	return prev[len(rb)]
 }
 
-// fetch is a file's content from the overlay of files not yet written, or from the disk.
+// fetch is a file's content from the overlay of files not yet written, or from the disk. Only a
+// clean relative path (no empty, "." or ".." component, not absolute) is looked up, and a disk read
+// is refused when the path's symlinks resolve to a target outside root.
 func fetch(root string, overlay map[string][]byte, rel string) ([]byte, error) {
+	if !cleanRelative(rel) {
+		return nil, fmt.Errorf("project path %q is not a clean path inside the project", rel)
+	}
 	if b, ok := overlay[rel]; ok {
 		return b, nil
 	}
-	return os.ReadFile(filepath.Join(root, rel))
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	inside, err := filepath.Rel(base, target)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) || filepath.IsAbs(inside) {
+		return nil, fmt.Errorf("project path %q resolves outside the project", rel)
+	}
+	return os.ReadFile(target)
+}
+
+// cleanRelative reports whether rel is a non-empty relative path whose components are all
+// non-empty and neither "." nor "..".
+func cleanRelative(rel string) bool {
+	if rel == "" || filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") {
+		return false
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // Fetch is a project file's content from overlay (files not yet written) or the disk.
