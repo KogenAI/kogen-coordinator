@@ -55,6 +55,27 @@ func TestObserveSyncInTestsCallsFnWithTheFileOnEverySync(t *testing.T) {
 	}
 }
 
+func TestSyncReturnsTheFlushErrorOfAClosedFileUnlessSkipped(t *testing.T) {
+	skip.Store(false)
+	t.Cleanup(func() { skip.Store(false) })
+	f, err := os.Create(filepath.Join(t.TempDir(), "closed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Sync(f); err == nil {
+		t.Fatal("Sync of a closed file with syncing enabled = nil, want the flush error")
+	}
+
+	skip.Store(true)
+	if err := Sync(f); err != nil {
+		t.Fatalf("Sync of a closed file while syncing is skipped = %v, want nil", err)
+	}
+}
+
 // moduleRoot is the folder with go.mod, the parent of durable/.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
