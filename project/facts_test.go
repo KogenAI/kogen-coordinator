@@ -241,6 +241,15 @@ func TestEncodeJSONValues(t *testing.T) {
 		{42, `42`},
 		{int64(-7), `-7`},
 		{json.Number("12345678901234567890"), `12345678901234567890`},
+		{json.Number("0"), `0`},
+		{json.Number("-0"), `-0`},
+		{json.Number("3.14"), `3.14`},
+		{json.Number("1.50"), `1.50`},
+		{json.Number("1E+10"), `1E+10`},
+		{json.Number("2.5e-3"), `2.5e-3`},
+		{json.Number("1e400"), `1e400`},
+		{map[string]any{"n": json.Number("1.50")}, `{"n":1.50}`},
+		{[]any{json.Number("1E+10")}, `[1E+10]`},
 		{[]string{}, `[]`},
 		{[]string{"a", "b\n"}, `["a","b\n"]`},
 		{map[string]string{"z": "1", "a": "2"}, `{"a":"2","z":"1"}`},
@@ -256,6 +265,14 @@ func TestEncodeJSONValues(t *testing.T) {
 		}
 		if string(got) != c.want {
 			t.Errorf("%#v = %s, want %s", c.in, got, c.want)
+		}
+	}
+	for _, text := range []string{"", "abc", "01", "-", "-01", "1.", ".5", "+1", "1e", "1e+", "0x10", "NaN", "Inf", " 1", "1 ", "1,2", "{}"} {
+		n := json.Number(text)
+		for _, in := range []any{n, map[string]any{"n": n}, []any{n}} {
+			if got, err := EncodeJSON(in); err == nil || got != nil {
+				t.Errorf("%#v = %q, %v; want nil and an error", in, got, err)
+			}
 		}
 	}
 	for _, bad := range []any{"a\xffb", map[string]any{"k": "\xc3"}, map[string]any{"\xff": 1}, []string{"\xfe"}, make(chan int)} {

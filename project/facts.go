@@ -179,6 +179,9 @@ func writeJSON(b *bytes.Buffer, v any) error {
 	case string:
 		return writeJSONString(b, x)
 	case json.Number:
+		if !validJSONNumber(string(x)) {
+			return fmt.Errorf("invalid json.Number %q", string(x))
+		}
 		b.WriteString(string(x))
 	case int:
 		b.WriteString(strconv.Itoa(x))
@@ -250,6 +253,44 @@ func writeJSON(b *bytes.Buffer, v any) error {
 		return writeJSON(b, norm)
 	}
 	return nil
+}
+
+// validJSONNumber reports whether s follows the JSON number grammar: an optional minus, an
+// integer part of 0 or a nonzero digit and digits, an optional fraction with at least one digit
+// and an optional exponent with an optional sign and at least one digit.
+func validJSONNumber(s string) bool {
+	i := 0
+	digits := func() int {
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		return i - start
+	}
+	if i < len(s) && s[i] == '-' {
+		i++
+	}
+	if i < len(s) && s[i] == '0' {
+		i++
+	} else if i >= len(s) || s[i] < '1' || s[i] > '9' || digits() == 0 {
+		return false
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		if digits() == 0 {
+			return false
+		}
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		if digits() == 0 {
+			return false
+		}
+	}
+	return i == len(s)
 }
 
 func writeJSONString(b *bytes.Buffer, s string) error {
