@@ -1,0 +1,64 @@
+{
+  "correct": {
+    "files": {
+      "project/yaml.go": {
+        "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -96,6 +96,11 @@\n \tprev := byte(' ')\n \tfor i := 0; i < len(s); i++ {\n \t\tc := s[i]\n+\t\tif q == '\"' && c == '\\\\' && i+1 < len(s) {\n+\t\t\ti++\n+\t\t\tprev = s[i]\n+\t\t\tcontinue\n+\t\t}\n \t\tif c == '#' && q == 0 && (prev == ' ' || prev == '\\t') {\n \t\t\treturn trimRightSpace(s[:i])\n \t\t}\n"
+      },
+      "project/yaml_test.go": {
+        "patch": "--- a/project/yaml_test.go\n+++ b/project/yaml_test.go\n@@ -135,3 +135,25 @@\n \t\t}\n \t}\n }\n+\n+func TestYAMLEscapedQuoteComments(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname, scalar, want string\n+\t}{\n+\t\t{\"escaped quote hash\", `\"before \\\" # inside and all following text\"`, `before \" # inside and all following text`},\n+\t\t{\"closing quote comment\", `\"before \\\" # inside and all following text\" # outside comment`, `before \" # inside and all following text`},\n+\t\t{\"escaped backslash closing quote\", `\"ends with a backslash \\\\\" # outside comment`, `ends with a backslash \\`},\n+\t\t{\"single quote\", `'it''s # not a comment' # outside comment`, `it's # not a comment`},\n+\t\t{\"plain\", `some text, with [brackets] # outside comment`, `some text, with [brackets]`},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tnode, problems := parseYAML(\"value: \" + tc.scalar + \"\\n\")\n+\t\t\tif len(problems) != 0 || node == nil {\n+\t\t\t\tt.Fatalf(\"parseYAML: %v\", problems)\n+\t\t\t}\n+\t\t\tif got := node.pairs[0].node.text; got != tc.want {\n+\t\t\t\tt.Fatalf(\"got %q, want %q\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "escaped quotes terminate quote tracking",
+      "scenario": "Preserve the entire scalar after an escaped quote",
+      "step": "Then yaml-comment-escaped-quotes: the parsed setup scalars are",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -96,11 +96,6 @@\n \tprev := byte(' ')\n \tfor i := 0; i < len(s); i++ {\n \t\tc := s[i]\n-\t\tif q == '\"' && c == '\\\\' && i+1 < len(s) {\n-\t\t\ti++\n-\t\t\tprev = s[i]\n-\t\t\tcontinue\n-\t\t}\n \t\tif c == '#' && q == 0 && (prev == ' ' || prev == '\\t') {\n \t\t\treturn trimRightSpace(s[:i])\n \t\t}\n"
+        }
+      }
+    },
+    {
+      "name": "quoted lines bypass comment stripping",
+      "scenario": "Remove a comment after the actual closing quote",
+      "step": "Then yaml-comment-escaped-quotes: the parsed setup scalars are",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -92,6 +92,9 @@\n \n // stripComment removes a comment: `#` at the start or after a space, outside quotes.\n func stripComment(s string) string {\n+\tif strings.Contains(s, \"\\\"\") {\n+\t\treturn s\n+\t}\n \tvar q byte\n \tprev := byte(' ')\n \tfor i := 0; i < len(s); i++ {\n"
+        }
+      }
+    },
+    {
+      "name": "single quotes no longer protect hashes",
+      "scenario": "Preserve existing single-quoted hash handling",
+      "step": "Then yaml-comment-escaped-quotes: the parsed setup scalars are",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -104,7 +104,7 @@\n \t\tif c == '#' && q == 0 && (prev == ' ' || prev == '\\t') {\n \t\t\treturn trimRightSpace(s[:i])\n \t\t}\n-\t\tif q == 0 && (c == '\"' || c == '\\'') {\n+\t\tif q == 0 && c == '\"' {\n \t\t\tq = c\n \t\t} else if q == c {\n \t\t\tq = 0\n"
+        }
+      }
+    },
+    {
+      "name": "plain comments are retained",
+      "scenario": "Preserve existing plain scalar comment handling",
+      "step": "Then yaml-comment-escaped-quotes: the parsed setup scalars are",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -101,7 +101,7 @@\n \t\t\tprev = s[i]\n \t\t\tcontinue\n \t\t}\n-\t\tif c == '#' && q == 0 && (prev == ' ' || prev == '\\t') {\n+\t\tif c == '#' && q == 0 && strings.ContainsAny(s, \"\\\"'\") && (prev == ' ' || prev == '\\t') {\n \t\t\treturn trimRightSpace(s[:i])\n \t\t}\n \t\tif q == 0 && (c == '\"' || c == '\\'') {\n"
+        }
+      }
+    },
+    {
+      "name": "any preceding backslash hides a closing quote",
+      "scenario": "Remove a comment after a closing quote preceded by an escaped backslash",
+      "step": "Then yaml-comment-escaped-quotes: the parsed setup scalars are",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -96,17 +96,12 @@\n \tprev := byte(' ')\n \tfor i := 0; i < len(s); i++ {\n \t\tc := s[i]\n-\t\tif q == '\"' && c == '\\\\' && i+1 < len(s) {\n-\t\t\ti++\n-\t\t\tprev = s[i]\n-\t\t\tcontinue\n-\t\t}\n \t\tif c == '#' && q == 0 && (prev == ' ' || prev == '\\t') {\n \t\t\treturn trimRightSpace(s[:i])\n \t\t}\n \t\tif q == 0 && (c == '\"' || c == '\\'') {\n \t\t\tq = c\n-\t\t} else if q == c {\n+\t\t} else if q == c && !(q == '\"' && i > 0 && s[i-1] == '\\\\') {\n \t\t\tq = 0\n \t\t}\n \t\tprev = c\n"
+        }
+      }
+    }
+  ]
+}

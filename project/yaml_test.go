@@ -135,3 +135,24 @@ func TestStripComment(t *testing.T) {
 		}
 	}
 }
+
+func TestYAMLEscapedQuotesAndComments(t *testing.T) {
+	for _, c := range []struct {
+		name, scalar, want string
+	}{
+		{"escaped quote", `"before \" # inside and all following text"`, `before " # inside and all following text`},
+		{"closing quote", `"before \" # inside and all following text" # outside comment`, `before " # inside and all following text`},
+		{"escaped backslash", `"ends with a backslash \\" # outside comment`, `ends with a backslash \`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			node, problems := parseYAML("value: " + c.scalar + "\n")
+			if len(problems) != 0 {
+				t.Fatal(problems)
+			}
+			got := node.pairs[0].node.text
+			if got != c.want {
+				t.Fatalf("scalar = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

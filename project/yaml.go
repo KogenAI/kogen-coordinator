@@ -90,12 +90,17 @@ func parseYAML(text string) (node *yamlNode, problems []problem) {
 	return n, nil
 }
 
-// stripComment removes a comment: `#` at the start or after a space, outside quotes.
+// stripComment removes a comment: `#` at the start or after a space or tab, outside quotes.
 func stripComment(s string) string {
 	var q byte
 	prev := byte(' ')
 	for i := 0; i < len(s); i++ {
 		c := s[i]
+		if q == '"' && c == '\\' && i+1 < len(s) {
+			// Consume the escape pair just as quotedScalar does.
+			i++
+			continue
+		}
 		if c == '#' && q == 0 && (prev == ' ' || prev == '\t') {
 			return trimRightSpace(s[:i])
 		}
