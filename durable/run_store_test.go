@@ -176,3 +176,50 @@ func TestRunStoreListFiltersEntries(t *testing.T) {
 		t.Fatalf("list: %v %v", ids, err)
 	}
 }
+
+func TestRunStoreReadValidatesRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{
+			name:    "unsupported version",
+			data:    `{"version":2,"id":"run","events":[],"omitted":0,"outcome":"","reason":"","evidence":[]}`,
+			wantErr: true,
+		},
+		{
+			name:    "mismatched embedded ID",
+			data:    `{"version":1,"id":"other","events":[],"omitted":0,"outcome":"","reason":"","evidence":[]}`,
+			wantErr: true,
+		},
+		{
+			name: "valid record",
+			data: `{"version":1,"id":"run","events":[],"omitted":0,"outcome":"","reason":"","evidence":[]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "run.json"), []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			s, err := OpenRunStore(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := s.Read("run")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Read accepted invalid record: %+v", record)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.ID != "run" {
+				t.Fatalf("Read ID = %q, want run", record.ID)
+			}
+		})
+	}
+}
