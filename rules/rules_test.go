@@ -1,6 +1,7 @@
 package rules_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -366,5 +368,91 @@ func TestCacheVerifiesRawRevisionAndOverridesWithHTMLCharacters(t *testing.T) {
 	c, err := f.load()
 	if err != nil || c.Origin != rules.Cached || c.ContentHash != live.ContentHash || string(c.Rules[0].Revision) != `"r&5"` {
 		t.Fatalf("cache unusable: %+v %v", c, err)
+	}
+}
+
+// Pad a valid same-scope response with JSON whitespace so size alone decides
+// whether it is accepted, even if a reader truncates the trailing whitespace.
+func sizedRulesBody(size int) string {
+	body := rulesBody("2")
+	return body + strings.Repeat(" ", size-len(body))
+}
+
+func TestResponseSizeBoundary(t *testing.T) {
+	const limit = 16 << 20
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{"below", limit - 1},
+		{"at", limit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFx(t, "hold")
+			f.body = sizedRulesBody(tc.size)
+			s, err := f.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s == nil || s.Origin != rules.Live || s.FallbackReason != "" || len(s.Rules) != 1 || string(s.Rules[0].Revision) != "2" {
+				t.Fatalf("boundary response: %+v", s)
+			}
+			files, err := filepath.Glob(filepath.Join(f.root, ".kogen", "local", "studio-rules", "*.json"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("live cache files: %v, error: %v", files, err)
+			}
+		})
+	}
+}
+
+func TestOversizedResponseWithoutCache(t *testing.T) {
+	for _, policy := range []string{"hold", "unavailable"} {
+		t.Run(policy, func(t *testing.T) {
+			f := newFx(t, policy)
+			f.body = sizedRulesBody((16 << 20) + 1)
+			s, err := f.load()
+			var re *rules.Error
+			if s != nil || !errors.As(err, &re) || re.Class != "rules/"+policy || re.Reason != "malformed_response" {
+				t.Fatalf("oversized response: snapshot=%+v error=%v", s, err)
+			}
+			files, err := filepath.Glob(filepath.Join(f.root, ".kogen", "local", "studio-rules", "*.json"))
+			if err != nil || len(files) != 0 {
+				t.Fatalf("rejected response created cache: %v, error: %v", files, err)
+			}
+		})
+	}
+}
+
+func TestOversizedResponsePreservesVerifiedCache(t *testing.T) {
+	f := newFx(t, "hold")
+	live, err := f.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(f.root, ".kogen", "local", "studio-rules", "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("primed cache files: %v, error: %v", files, err)
+	}
+	before, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.body = sizedRulesBody((16 << 20) + 1)
+	cached, err := f.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := *live
+	want.Origin = rules.Cached
+	want.FallbackReason = "malformed_response"
+	if !reflect.DeepEqual(cached, &want) {
+		t.Fatalf("oversized fallback: got %+v, want %+v", cached, &want)
+	}
+	after, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("oversized response changed verified cache bytes")
 	}
 }
