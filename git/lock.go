@@ -53,10 +53,11 @@ const lockHeader = "kogen-build-lock 1"
 type Lock struct {
 	Path string
 
-	mu    sync.Mutex
-	f     *os.File
-	token string
-	alive func(pid int) bool // nil: kill -0
+	mu     sync.Mutex
+	f      *os.File
+	token  string
+	alive  func(pid int) bool // nil: kill -0
+	strict bool
 }
 
 // NewLock returns an unacquired lock at path.
@@ -177,7 +178,7 @@ func (l *Lock) Release() {
 	if f == nil {
 		return
 	}
-	if sameFile(f, l.Path) {
+	if (!l.strict && sameFile(f, l.Path)) || (l.strict && sameEntry(f, l.Path)) {
 		os.Remove(l.Path)
 	}
 	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
@@ -285,6 +286,12 @@ func sameFile(f *os.File, path string) bool {
 	return err1 == nil && err2 == nil && os.SameFile(a, b)
 }
 
+func sameEntry(f *os.File, path string) bool {
+	a, err1 := f.Stat()
+	b, err2 := os.Lstat(path)
+	return err1 == nil && err2 == nil && os.SameFile(a, b)
+}
+
 func newToken() string {
 	b := make([]byte, 12)
 	rand.Read(b)
@@ -344,5 +351,40 @@ func AcquireBuild(root string, s *sys.Session) (*Lock, error) {
 		}
 		return nil, sys.Fail("environment", "build_running", "a Build is running in this repository ("+who+")", 3)
 	}
+	return l, nil
+}
+
+// ErrBuildLockExists indicates that strict acquisition found an occupied Build lock path.
+var ErrBuildLockExists = errors.New("build lock already exists")
+
+// AcquireBuildStrict takes a newly created Build lock, refusing any existing entry.
+func AcquireBuildStrict(root string) (*Lock, error) {
+	l := NewLock(BuildLockPath(root))
+	l.strict = true
+	if err := os.MkdirAll(filepath.Dir(l.Path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("lock %s: %w", l.Path, ErrBuildLockExists)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lock %s: %w", l.Path, err)
+	}
+	if !sameEntry(f, l.Path) {
+		f.Close()
+		return nil, fmt.Errorf("lock %s: lock entry changed", l.Path)
+	}
+	token := newToken()
+	body := fmt.Sprintf("%s\npid %d\ntoken %s\n", lockHeader, os.Getpid(), token)
+	if _, err := f.WriteAt([]byte(body), 0); err != nil {
+		f.Close()
+		return nil, err
+	}
+	l.f, l.token = f, token
 	return l, nil
 }

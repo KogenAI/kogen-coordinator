@@ -1,0 +1,193 @@
+package main
+
+import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/KogenAI/kogen-coordinator/git"
+	"github.com/KogenAI/kogen-loop/sys"
+)
+
+func require(ok bool, message string, args ...any) {
+	if !ok {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", os.Args[1], fmt.Sprintf(message, args...))
+		os.Exit(1)
+	}
+}
+
+func must[T any](v T, err error) T {
+	check(err)
+	return v
+}
+
+func check(err error) { require(err == nil, "unexpected error: %v", err) }
+
+func absent(path string) {
+	_, err := os.Lstat(path)
+	require(errors.Is(err, os.ErrNotExist), "expected absence at %s: %v", path, err)
+}
+
+type snapshot struct {
+	info, owner os.FileInfo
+	body        []byte
+}
+
+func take(path string) snapshot {
+	s := snapshot{info: must(os.Lstat(path))}
+	switch {
+	case s.info.IsDir():
+		entries := must(os.ReadDir(path))
+		require(len(entries) == 1 && entries[0].Name() == "owner", "legacy directory entries changed: %v", entries)
+		owner := filepath.Join(path, "owner")
+		s.owner = must(os.Lstat(owner))
+		s.body = must(os.ReadFile(owner))
+	case s.info.Mode()&os.ModeSymlink != 0:
+		s.body = []byte(must(os.Readlink(path)))
+	default:
+		s.body = must(os.ReadFile(path))
+	}
+	return s
+}
+
+func unchanged(path string, before snapshot) {
+	after := take(path)
+	require(os.SameFile(before.info, after.info) && before.info.Mode() == after.info.Mode(), "path identity or mode changed")
+	if before.owner != nil {
+		require(after.owner != nil && os.SameFile(before.owner, after.owner) && before.owner.Mode() == after.owner.Mode(), "legacy owner identity or mode changed")
+	}
+	require(bytes.Equal(before.body, after.body), "artifact bytes changed")
+}
+
+type attempt struct {
+	lock *git.Lock
+	err  error
+}
+
+// The winner stays held until the result is received. No sleep establishes ordering.
+func bounded(f func() (*git.Lock, error)) attempt {
+	done := make(chan attempt, 1)
+	go func() {
+		l, err := f()
+		done <- attempt{l, err}
+	}()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(2 * time.Second):
+		require(false, "contender blocked while the owner was held")
+		return attempt{}
+	}
+}
+
+func refuse(root string) {
+	got := bounded(func() (*git.Lock, error) { return acquire(root) })
+	require(got.lock == nil && errors.Is(got.err, occupied), "expected nil lock and occupied-path refusal, got lock=%v error=%v", got.lock != nil, got.err)
+}
+
+func normal(root string) (*git.Lock, error) {
+	return git.AcquireBuild(root, sys.NewWith(nil, root))
+}
+
+func owner(path string, l *git.Lock) {
+	require(l != nil && l.Path == path, "acquired wrong lock path")
+	pid, token, held := git.LockOwner(path)
+	raw, err := hex.DecodeString(token)
+	require(held && pid == strconv.Itoa(os.Getpid()) && token == l.Token() && err == nil && len(raw) == 12, "invalid owner: pid=%q token=%q held=%t", pid, token, held)
+}
+
+func release(path string, l *git.Lock) {
+	l.Release()
+	absent(path)
+	require(l.Token() == "", "release did not clear token")
+	l.Release()
+	absent(path)
+}
+
+func main() {
+	mode, dir := os.Args[1], os.Args[2]
+	root := filepath.Join(dir, "root")
+	check(os.Mkdir(root, 0o755))
+	path := git.BuildLockPath(root)
+	switch mode {
+	case "fresh":
+		absent(path)
+		l := must(acquire(root))
+		owner(path, l)
+		before := take(path)
+		got := bounded(func() (*git.Lock, error) { return normal(root) })
+		e, ok := sys.AsError(got.err)
+		require(got.lock == nil && ok && e.Class == "environment" && e.Reason == "build_running" && e.Exit == 3 && !errors.Is(got.err, occupied), "normal contender was not refused as a running Build: %v", got.err)
+		unchanged(path, before)
+		owner(path, l)
+		refuse(root)
+		unchanged(path, before)
+		owner(path, l)
+		release(path, l)
+	case "held":
+		l := must(normal(root))
+		owner(path, l)
+		before := take(path)
+		refuse(root)
+		unchanged(path, before)
+		owner(path, l)
+		release(path, l)
+	case "replaced":
+		l := must(acquire(root))
+		owner(path, l)
+		moved := path + ".moved"
+		check(os.Rename(path, moved))
+		check(os.Symlink(filepath.Base(moved), path))
+		before := take(path)
+		l.Release()
+		unchanged(path, before)
+		require(l.Token() == "" && !must(git.NewLock(moved).Held()), "release did not drop the original flock and token")
+	case "parent":
+		parent := filepath.Dir(path)
+		check(os.MkdirAll(filepath.Dir(parent), 0o755))
+		check(os.WriteFile(parent, []byte("obstruction\n"), 0o644))
+		before := take(parent)
+		l, err := acquire(root)
+		require(l == nil && err != nil && !errors.Is(err, occupied), "expected a non-occupancy acquisition error: %v", err)
+		unchanged(parent, before)
+	case "late", "regular file", "stale pid file", "live directory", "stale directory", "dangling symlink":
+		check(os.MkdirAll(filepath.Dir(path), 0o755))
+		if mode == "late" {
+			absent(path)
+		}
+		switch mode {
+		case "late", "regular file":
+			check(os.WriteFile(path, []byte("fixture artifact\n"), 0o644))
+		case "stale pid file":
+			check(os.WriteFile(path, []byte("987654321\n"), 0o644))
+		case "live directory", "stale directory":
+			check(os.Mkdir(path, 0o755))
+			pid := "987654321"
+			if mode == "live directory" {
+				pid = strconv.Itoa(os.Getpid())
+			}
+			check(os.WriteFile(filepath.Join(path, "owner"), []byte(pid+"\n"), 0o644))
+		case "dangling symlink":
+			check(os.Symlink("absent-target", path))
+		}
+		before := take(path)
+		refuse(root)
+		unchanged(path, before)
+		if mode == "dangling symlink" {
+			absent(filepath.Join(filepath.Dir(path), "absent-target"))
+		}
+		if mode == "stale pid file" || mode == "stale directory" {
+			l := must(normal(root))
+			owner(path, l)
+			release(path, l)
+		}
+	default:
+		require(false, "unknown fixture")
+	}
+	fmt.Println("checked " + mode)
+}

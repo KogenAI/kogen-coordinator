@@ -1,0 +1,11 @@
+{
+  "None": false,
+  "Path": ".kogen/models/coord-strict-transient-build-lock/model.qnt",
+  "Invariants": [
+    "RefusalPreserves",
+    "OwnerHasCustody"
+  ],
+  "Seed": "1",
+  "Samples": "200",
+  "Steps": "20"
+}

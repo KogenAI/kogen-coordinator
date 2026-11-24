@@ -1,0 +1,81 @@
+{
+  "correct": {
+    "files": {
+      "git/lock.go": {
+        "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -53,10 +53,11 @@\n type Lock struct {\n \tPath string\n \n-\tmu    sync.Mutex\n-\tf     *os.File\n-\ttoken string\n-\talive func(pid int) bool // nil: kill -0\n+\tmu         sync.Mutex\n+\tf          *os.File\n+\ttoken      string\n+\talive      func(pid int) bool // nil: kill -0\n+\tstrictPath bool\n }\n \n // NewLock returns an unacquired lock at path.\n@@ -177,7 +178,7 @@\n \tif f == nil {\n \t\treturn\n \t}\n-\tif sameFile(f, l.Path) {\n+\tif l.strictPath && sameEntry(f, l.Path) || !l.strictPath && sameFile(f, l.Path) {\n \t\tos.Remove(l.Path)\n \t}\n \tsyscall.Flock(int(f.Fd()), syscall.LOCK_UN)\n@@ -346,3 +347,43 @@\n \t}\n \treturn l, nil\n }\n+\n+// ErrBuildLockExists reports that strict acquisition found an occupied Build lock path.\n+var ErrBuildLockExists = errors.New(\"Build lock path already exists\")\n+\n+// AcquireBuildStrict takes a Build lock only after exclusive creation.\n+func AcquireBuildStrict(root string) (*Lock, error) {\n+\tl := NewLock(BuildLockPath(root))\n+\tif err := os.MkdirAll(filepath.Dir(l.Path), 0o755); err != nil {\n+\t\treturn nil, err\n+\t}\n+\tf, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)\n+\tif errors.Is(err, os.ErrExist) {\n+\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, ErrBuildLockExists)\n+\t}\n+\tif err != nil {\n+\t\treturn nil, err\n+\t}\n+\tif err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {\n+\t\tf.Close()\n+\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, err)\n+\t}\n+\tif !sameEntry(f, l.Path) {\n+\t\tf.Close()\n+\t\treturn nil, fmt.Errorf(\"lock %s changed during acquisition\", l.Path)\n+\t}\n+\ttoken := newToken()\n+\tbody := fmt.Sprintf(\"%s\\npid %d\\ntoken %s\\n\", lockHeader, os.Getpid(), token)\n+\tif _, err := f.WriteAt([]byte(body), 0); err != nil {\n+\t\tf.Close()\n+\t\treturn nil, err\n+\t}\n+\tl.f, l.token, l.strictPath = f, token, true\n+\treturn l, nil\n+}\n+\n+func sameEntry(f *os.File, path string) bool {\n+\ta, err1 := f.Stat()\n+\tb, err2 := os.Lstat(path)\n+\treturn err1 == nil && err2 == nil && os.SameFile(a, b)\n+}\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "Use ordinary takeover after exclusive creation loses",
+      "scenario": "The earlier absence observation is not authority",
+      "step": "Then coord-strict-transient-build-lock: strict acquisition refuses and preserves the file created after the caller observed absence",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -359,7 +359,7 @@\n \t}\n \tf, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)\n \tif errors.Is(err, os.ErrExist) {\n-\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, ErrBuildLockExists)\n+\t\treturn AcquireBuild(root, sys.NewWith(nil, root))\n \t}\n \tif err != nil {\n \t\treturn nil, err\n"
+        }
+      }
+    },
+    {
+      "name": "Wait on the held artifact before refusing",
+      "scenario": "The normal owner stays in custody",
+      "step": "Then coord-strict-transient-build-lock: strict acquisition promptly refuses the normally held lock and preserves its owner, inode and bytes",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -359,7 +359,11 @@\n \t}\n \tf, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)\n \tif errors.Is(err, os.ErrExist) {\n-\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, ErrBuildLockExists)\n+\t\tif other, err := os.Open(l.Path); err == nil {\n+\t\t\tsyscall.Flock(int(other.Fd()), syscall.LOCK_EX)\n+\t\t\tother.Close()\n+\t\t}\n+\t\treturn nil, ErrBuildLockExists\n \t}\n \tif err != nil {\n \t\treturn nil, err\n"
+        }
+      }
+    },
+    {
+      "name": "Publish strict ownership without holding the flock",
+      "scenario": "A strict winner excludes both contenders until release",
+      "step": "Then coord-strict-transient-build-lock: a strict owner at BuildLockPath has a valid token, promptly excludes normal and strict contenders, and releases the same lock",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -364,10 +364,7 @@\n \tif err != nil {\n \t\treturn nil, err\n \t}\n-\tif err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {\n-\t\tf.Close()\n-\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, err)\n-\t}\n+\n \tif !sameEntry(f, l.Path) {\n \t\tf.Close()\n \t\treturn nil, fmt.Errorf(\"lock %s changed during acquisition\", l.Path)\n"
+        }
+      }
+    },
+    {
+      "name": "Block the ordinary contender instead of promptly refusing",
+      "scenario": "A strict winner excludes both contenders until release",
+      "step": "Then coord-strict-transient-build-lock: a strict owner at BuildLockPath has a valid token, promptly excludes normal and strict contenders, and releases the same lock",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -99,7 +99,7 @@\n \t\tif err != nil {\n \t\t\treturn LockResult{}, err\n \t\t}\n-\t\tif err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {\n+\t\tif err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {\n \t\t\tpid := realPID(lockPID(f))\n \t\t\tf.Close()\n \t\t\tif errors.Is(err, syscall.EWOULDBLOCK) {\n"
+        }
+      }
+    },
+    {
+      "name": "Release follows a symlink to the original inode",
+      "scenario": "Strict release cannot remove a replacement",
+      "step": "Then coord-strict-transient-build-lock: the strict owner releases its own lock without removing the replacement symlink at BuildLockPath",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -178,7 +178,7 @@\n \tif f == nil {\n \t\treturn\n \t}\n-\tif l.strictPath && sameEntry(f, l.Path) || !l.strictPath && sameFile(f, l.Path) {\n+\tif sameFile(f, l.Path) {\n \t\tos.Remove(l.Path)\n \t}\n \tsyscall.Flock(int(f.Fd()), syscall.LOCK_UN)\n"
+        }
+      }
+    },
+    {
+      "name": "Mistake an unusable parent for an occupied lock",
+      "scenario": "An unusable parent is not custody",
+      "step": "Then coord-strict-transient-build-lock: strict acquisition reports the parent obstruction without classifying it as an occupied Build lock",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -355,7 +355,7 @@\n func AcquireBuildStrict(root string) (*Lock, error) {\n \tl := NewLock(BuildLockPath(root))\n \tif err := os.MkdirAll(filepath.Dir(l.Path), 0o755); err != nil {\n-\t\treturn nil, err\n+\t\treturn nil, ErrBuildLockExists\n \t}\n \tf, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)\n \tif errors.Is(err, os.ErrExist) {\n"
+        }
+      }
+    },
+    {
+      "name": "Apply stale directory repair on the strict collision path",
+      "scenario": "Strict refusal leaves stale directory repair to ordinary acquisition",
+      "step": "Then coord-strict-transient-build-lock: the stale directory is preserved by strict refusal and still allows ordinary stale takeover and release",
+      "files": {
+        "git/lock.go": {
+          "patch": "--- a/git/lock.go\n+++ b/git/lock.go\n@@ -359,7 +359,10 @@\n \t}\n \tf, err := os.OpenFile(l.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)\n \tif errors.Is(err, os.ErrExist) {\n-\t\treturn nil, fmt.Errorf(\"lock %s: %w\", l.Path, ErrBuildLockExists)\n+\t\tif st, e := os.Lstat(l.Path); e == nil && st.IsDir() {\n+\t\t\tl.legacyDirectory(true)\n+\t\t}\n+\t\treturn nil, ErrBuildLockExists\n \t}\n \tif err != nil {\n \t\treturn nil, err\n"
+        }
+      }
+    }
+  ]
+}
