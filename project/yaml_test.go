@@ -48,6 +48,10 @@ func TestYAMLProblems(t *testing.T) {
 	}{
 		{"empty", "", 1, "the file is empty"},
 		{"only comments", "# a\n  \n", 1, "the file is empty"},
+		{"tab before mapping", "version: 1\n\tcommands: {}\n", 2, "tabs are not allowed in indentation"},
+		{"mixed indentation", "version: 1\n  \tcommands: {}\n", 2, "tabs are not allowed in indentation"},
+		{"tab before nested mapping", "version: 1\ncommands:\n\tsetup: []\n", 3, "tabs are not allowed in indentation"},
+		{"tab before sequence item", "version: 1\ncommands:\n  setup:\n  \t- echo ok\n", 4, "tabs are not allowed in indentation"},
 		{"stray indent", "a: 1\n  b: 2\n", 2, "unexpected indentation"},
 		{"dedent into nothing", "a:\n    b: 1\n  c: 2\n", 3, "unexpected indentation"},
 		{"no colon", "a: 1\nb\n", 2, "expected key: value"},
@@ -154,5 +158,21 @@ func TestYAMLEscapedQuotesAndComments(t *testing.T) {
 				t.Fatalf("scalar = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestYAMLSpaceIndentedSequencePreservesScalars(t *testing.T) {
+	node, problems := parseYAML("setup:\n  - echo first\n  - echo second\n  - echo\tkeep this tab\n")
+	if len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	seq := node.pairs[0].node
+	if seq.kind != kindSeq || len(seq.items) != 3 {
+		t.Fatalf("setup = %+v", seq)
+	}
+	for i, want := range []string{"echo first", "echo second", "echo\tkeep this tab"} {
+		if got := seq.items[i]; got.kind != kindScalar || got.text != want {
+			t.Errorf("item %d = %+v, want %q", i, got, want)
+		}
 	}
 }

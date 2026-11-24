@@ -68,6 +68,10 @@ func parseYAML(text string) (node *yamlNode, problems []problem) {
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
+		leading := content[:len(content)-len(trimLeftSpace(content))]
+		if strings.ContainsRune(leading, '\t') {
+			return nil, []problem{{i + 1, "tabs are not allowed in indentation"}}
+		}
 		indent := len(content) - len(strings.TrimLeft(content, " "))
 		lines = append(lines, yamlLine{i + 1, indent, trimLeftSpace(content)})
 	}
