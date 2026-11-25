@@ -1,0 +1,51 @@
+{
+  "correct": {
+    "files": {
+      "project/gherkin.go": {
+        "patch": "--- a/project/gherkin.go\n+++ b/project/gherkin.go\n@@ -241,10 +241,15 @@\n \tpanic(\"unreachable: step without keyword\")\n }\n \n+var decodeExamplesCell = strings.NewReplacer(`\\|`, \"|\", `\\n`, \"\\n\", `\\\\`, `\\`)\n+\n // row reads a table row: an argument of the last step, or an Examples row.\n func (st *gState) row(t string, n int) {\n \tif st.cur != nil && !st.cur.background && len(st.cur.examples) > 0 {\n \t\tcells := gCells(t, n)\n+\t\tfor i, cell := range cells {\n+\t\t\tcells[i] = decodeExamplesCell.Replace(cell)\n+\t\t}\n \t\tex := st.cur.examples[len(st.cur.examples)-1]\n \t\tif ex.hasHeader {\n \t\t\tex.rows = append(ex.rows, gRow{n, cells})\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "Substitute raw Examples cells",
+      "scenario": "An escaped pipe stays in its Examples cell",
+      "step": "Then gherkin-unescape-example-table-cells: the generated names and step texts are",
+      "files": {
+        "project/gherkin.go": {
+          "patch": "--- a/project/gherkin.go\n+++ b/project/gherkin.go\n@@ -241,15 +241,10 @@\n \tpanic(\"unreachable: step without keyword\")\n }\n \n-var decodeExamplesCell = strings.NewReplacer(`\\|`, \"|\", `\\n`, \"\\n\", `\\\\`, `\\`)\n-\n // row reads a table row: an argument of the last step, or an Examples row.\n func (st *gState) row(t string, n int) {\n \tif st.cur != nil && !st.cur.background && len(st.cur.examples) > 0 {\n \t\tcells := gCells(t, n)\n-\t\tfor i, cell := range cells {\n-\t\t\tcells[i] = decodeExamplesCell.Replace(cell)\n-\t\t}\n \t\tex := st.cur.examples[len(st.cur.examples)-1]\n \t\tif ex.hasHeader {\n \t\t\tex.rows = append(ex.rows, gRow{n, cells})\n"
+        }
+      }
+    },
+    {
+      "name": "Decode before splitting Examples rows",
+      "scenario": "An escaped pipe stays in its Examples cell",
+      "step": "Then gherkin-unescape-example-table-cells: the generated names and step texts are",
+      "files": {
+        "project/gherkin.go": {
+          "patch": "--- a/project/gherkin.go\n+++ b/project/gherkin.go\n@@ -246,10 +246,7 @@\n // row reads a table row: an argument of the last step, or an Examples row.\n func (st *gState) row(t string, n int) {\n \tif st.cur != nil && !st.cur.background && len(st.cur.examples) > 0 {\n-\t\tcells := gCells(t, n)\n-\t\tfor i, cell := range cells {\n-\t\t\tcells[i] = decodeExamplesCell.Replace(cell)\n-\t\t}\n+\t\tcells := gCells(decodeExamplesCell.Replace(t), n)\n \t\tex := st.cur.examples[len(st.cur.examples)-1]\n \t\tif ex.hasHeader {\n \t\t\tex.rows = append(ex.rows, gRow{n, cells})\n"
+        }
+      }
+    },
+    {
+      "name": "Decode pipes but leave newline and backslash escapes raw",
+      "scenario": "Examples decode newline and backslash escapes once",
+      "step": "Then gherkin-unescape-example-table-cells: the generated names and step texts are",
+      "files": {
+        "project/gherkin.go": {
+          "patch": "--- a/project/gherkin.go\n+++ b/project/gherkin.go\n@@ -241,7 +241,7 @@\n \tpanic(\"unreachable: step without keyword\")\n }\n \n-var decodeExamplesCell = strings.NewReplacer(`\\|`, \"|\", `\\n`, \"\\n\", `\\\\`, `\\`)\n+var decodeExamplesCell = strings.NewReplacer(`\\|`, \"|\")\n \n // row reads a table row: an argument of the last step, or an Examples row.\n func (st *gState) row(t string, n int) {\n"
+        }
+      }
+    },
+    {
+      "name": "Treat all table rows as Examples rows",
+      "scenario": "Escaped pipes in a step table do not change the scenario",
+      "step": "Then gherkin-unescape-example-table-cells: the generated names and step texts are",
+      "files": {
+        "project/gherkin.go": {
+          "patch": "--- a/project/gherkin.go\n+++ b/project/gherkin.go\n@@ -262,10 +262,6 @@\n \t\tst.mode = gExamples\n \t\treturn\n \t}\n-\tif st.mode == gScenario || st.mode == gBackground {\n-\t\tgCells(t, n)\n-\t\treturn\n-\t}\n \tgFail(n, \"a table must follow a step or Examples:\")\n }\n \n"
+        }
+      }
+    }
+  ]
+}

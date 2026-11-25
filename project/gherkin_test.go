@@ -215,3 +215,39 @@ func TestGherkinIgnoresOneLeadingBOM(t *testing.T) {
 		t.Fatalf("middle BOM: %+v, %v", mid, err)
 	}
 }
+
+func TestGherkinDecodesExamplesCells(t *testing.T) {
+	cases := []struct {
+		text  string
+		name  string
+		steps []string
+	}{
+		{`Feature: Labels
+  Scenario Outline: label <left> and <right>
+    Then use <right> with <left>
+    Examples:
+      | left | right |
+      | a\|b | plain |
+`, "label a|b and plain", []string{"use plain with a|b"}},
+		{`Feature: Labels
+  Scenario Outline: label <multi|line> and <literal>
+    Then use <literal> with <multi|line>
+    And retain <literal>
+    Examples:
+      | multi\|line | literal |
+      | one\ntwo | path\\n\q |
+`, "label one\ntwo and path\\n\\q", []string{"use path\\n\\q with one\ntwo", "retain path\\n\\q"}},
+	}
+	for _, c := range cases {
+		scenarios, err := ParseGherkin(c.text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(scenarios) != 1 {
+			t.Fatalf("got %d scenarios, want 1", len(scenarios))
+		}
+		if scenarios[0].Name != c.name || !slices.Equal(stepTexts(scenarios[0]), c.steps) {
+			t.Errorf("got name %q and steps %q; want %q and %q", scenarios[0].Name, stepTexts(scenarios[0]), c.name, c.steps)
+		}
+	}
+}

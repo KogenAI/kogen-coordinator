@@ -245,6 +245,9 @@ func parseStep(t string, n int) Step {
 func (st *gState) row(t string, n int) {
 	if st.cur != nil && !st.cur.background && len(st.cur.examples) > 0 {
 		cells := gCells(t, n)
+		for i, cell := range cells {
+			cells[i] = strings.NewReplacer(`\|`, `|`, `\n`, "\n", `\\`, `\`).Replace(cell)
+		}
 		ex := st.cur.examples[len(st.cur.examples)-1]
 		if ex.hasHeader {
 			ex.rows = append(ex.rows, gRow{n, cells})
