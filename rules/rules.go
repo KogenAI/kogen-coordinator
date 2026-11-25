@@ -81,6 +81,9 @@ func Load(ctx context.Context, root string, opts Options) (*Snapshot, error) {
 		}
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	getenv := opts.Getenv
 	if getenv == nil {
 		getenv = os.Getenv

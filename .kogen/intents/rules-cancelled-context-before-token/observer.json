@@ -1,0 +1,262 @@
+{
+  "good": [
+    {
+      "name": "active",
+      "state": "active",
+      "outcome": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "cancelled",
+      "state": "cancelled",
+      "outcome": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": false,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "expired",
+      "state": "expired",
+      "outcome": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": false,
+        "cache_read": false
+      }
+    }
+  ],
+  "bad": [
+    {
+      "name": "baseline-cancelled",
+      "state": "cancelled",
+      "outcome": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "baseline-expired",
+      "state": "expired",
+      "outcome": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "deadline-only-precedence",
+      "state": "cancelled",
+      "outcome": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "cancellation-only-precedence",
+      "state": "expired",
+      "outcome": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "consults-token-before-context",
+      "state": "cancelled",
+      "outcome": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "attempts-request-despite-done-context",
+      "state": "cancelled",
+      "outcome": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.Canceled"
+        },
+        "snapshot": null,
+        "requests": 1,
+        "token_lookup": false,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "returns-cache-despite-done-context",
+      "state": "expired",
+      "outcome": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": {
+          "authority": "advisory",
+          "scope": {
+            "workspace_id": "w",
+            "product_id": "kogen",
+            "repo": "r"
+          },
+          "rules": [],
+          "content_hash": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "retrieved_at": "2026-11-25T11:40:59.097931Z",
+          "origin": "live",
+          "fallback_reason": ""
+        },
+        "requests": 0,
+        "token_lookup": false,
+        "cache_read": true
+      }
+    },
+    {
+      "name": "changes-active-refusal",
+      "state": "active",
+      "outcome": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/refused",
+          "reason": "token_missing"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "*rules.Error",
+          "class": "rules/unavailable",
+          "reason": "token_missing"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": true,
+        "cache_read": false
+      }
+    },
+    {
+      "name": "reads-cache-and-discards-result",
+      "state": "expired",
+      "outcome": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null
+      },
+      "actual": {
+        "error": {
+          "kind": "context.DeadlineExceeded"
+        },
+        "snapshot": null,
+        "requests": 0,
+        "token_lookup": false,
+        "cache_read": true
+      }
+    }
+  ]
+}

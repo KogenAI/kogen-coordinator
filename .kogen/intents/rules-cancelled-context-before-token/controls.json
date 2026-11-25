@@ -1,0 +1,81 @@
+{
+  "correct": {
+    "files": {
+      "rules/rules.go": {
+        "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -95,6 +95,10 @@\n \t}\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n+\tif err := ctx.Err(); err != nil {\n+\t\treturn nil, err\n+\t}\n+\n \ttoken := getenv(cfg.TokenEnv)\n \tif token == \"\" {\n \t\treturn nil, fail(opts, &Error{Class: ClassRefused, Reason: \"token_missing\"})\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "deadline-only-precedence",
+      "scenario": "An already-cancelled context takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"cancelled\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -95,7 +95,7 @@\n \t}\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n-\tif err := ctx.Err(); err != nil {\n+\tif err := ctx.Err(); err == context.DeadlineExceeded {\n \t\treturn nil, err\n \t}\n \n"
+        }
+      }
+    },
+    {
+      "name": "cancellation-only-precedence",
+      "scenario": "An already-expired deadline takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"expired\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -95,7 +95,7 @@\n \t}\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n-\tif err := ctx.Err(); err != nil {\n+\tif err := ctx.Err(); err == context.Canceled {\n \t\treturn nil, err\n \t}\n \n"
+        }
+      }
+    },
+    {
+      "name": "consults-token-before-context",
+      "scenario": "An already-cancelled context takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"cancelled\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -95,11 +95,11 @@\n \t}\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n+\ttoken := getenv(cfg.TokenEnv)\n \tif err := ctx.Err(); err != nil {\n \t\treturn nil, err\n \t}\n \n-\ttoken := getenv(cfg.TokenEnv)\n \tif token == \"\" {\n \t\treturn nil, fail(opts, &Error{Class: ClassRefused, Reason: \"token_missing\"})\n \t}\n"
+        }
+      }
+    },
+    {
+      "name": "attempts-request-despite-done-context",
+      "scenario": "An already-cancelled context takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"cancelled\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -96,6 +96,7 @@\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n \tif err := ctx.Err(); err != nil {\n+\t\tfetch(context.WithoutCancel(ctx), client, cfg, \"\")\n \t\treturn nil, err\n \t}\n \n"
+        }
+      }
+    },
+    {
+      "name": "returns-cache-despite-done-context",
+      "scenario": "An already-expired deadline takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"expired\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -96,7 +96,7 @@\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n \tif err := ctx.Err(); err != nil {\n-\t\treturn nil, err\n+\t\treturn readCache(root, scope), err\n \t}\n \n \ttoken := getenv(cfg.TokenEnv)\n"
+        }
+      }
+    },
+    {
+      "name": "changes-active-refusal",
+      "scenario": "An already-cancelled context takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the active load yields without an HTTP request or cache read",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -101,7 +101,7 @@\n \n \ttoken := getenv(cfg.TokenEnv)\n \tif token == \"\" {\n-\t\treturn nil, fail(opts, &Error{Class: ClassRefused, Reason: \"token_missing\"})\n+\t\treturn nil, fail(opts, &Error{Class: ClassUnavailable, Reason: \"token_missing\"})\n \t}\n \n \tif err := ctx.Err(); err != nil {\n"
+        }
+      }
+    },
+    {
+      "name": "reads-cache-and-discards-result",
+      "scenario": "An already-expired deadline takes precedence over a missing token",
+      "step": "Then rules-cancelled-context-before-token: the \"expired\" load yields without token lookup, HTTP requests, or cache reads",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -96,6 +96,7 @@\n \tscope := Scope{WorkspaceID: cfg.WorkspaceID, ProductID: cfg.ProductID, Repo: cfg.Repo}\n \n \tif err := ctx.Err(); err != nil {\n+\t\treadCache(root, scope)\n \t\treturn nil, err\n \t}\n \n"
+        }
+      }
+    }
+  ]
+}

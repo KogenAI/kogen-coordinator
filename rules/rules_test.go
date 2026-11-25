@@ -152,6 +152,57 @@ func readConfig(t *testing.T, f *fx) string {
 	return string(b)
 }
 
+type countingTransport struct {
+	attempts int
+}
+
+func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	c.attempts++
+	return nil, errors.New("unexpected request")
+}
+
+func TestDoneContextBeforeTokenLookup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		makeContext func() (context.Context, context.CancelFunc)
+		want        error
+	}{
+		{"cancelled", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx, cancel
+		}, context.Canceled},
+		{"expired", func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+		}, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFx(t, "hold")
+			live, err := f.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.status = http.StatusServiceUnavailable
+			cached, err := f.load()
+			if err != nil || cached == nil || cached.Origin != rules.Cached || cached.ContentHash != live.ContentHash {
+				t.Fatalf("verified cache: %+v %v", cached, err)
+			}
+			ctx, cancel := tc.makeContext()
+			defer cancel()
+			lookups := 0
+			transport := &countingTransport{}
+			before := f.reqs
+			snapshot, err := rules.Load(ctx, f.root, rules.Options{
+				Getenv: func(string) string { lookups++; return "" },
+				Client: &http.Client{Transport: transport},
+			})
+			if snapshot != nil || err != tc.want || lookups != 0 || transport.attempts != 0 || f.reqs != before {
+				t.Fatalf("snapshot=%+v error=%v lookups=%d attempts=%d requests=%d", snapshot, err, lookups, transport.attempts, f.reqs-before)
+			}
+		})
+	}
+}
+
 func TestRefusedNeverReadsCache(t *testing.T) {
 	f := newFx(t, "unavailable")
 	if _, err := f.load(); err != nil {
