@@ -1,0 +1,13 @@
+package project
+
+import "fmt"
+
+// KogenObserveYAML exposes the direct parser result in the acceptance binary only.
+func KogenObserveYAML(text string) (bool, []string) {
+	node, problems := parseYAML(text)
+	lines := make([]string, 0, len(problems))
+	for _, p := range problems {
+		lines = append(lines, fmt.Sprintf("line %d: %s", p.line, p.msg))
+	}
+	return node != nil, lines
+}

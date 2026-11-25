@@ -283,6 +283,9 @@ func flowItems(text string, n int, closer byte, item func(string) string) string
 		if first && len(text) > 0 && text[0] == closer {
 			return text[1:]
 		}
+		if text == "" {
+			failAt(n, "unclosed "+open)
+		}
 		rest := item(trimLeftSpace(text))
 		first = false
 		r := trimLeftSpace(rest)

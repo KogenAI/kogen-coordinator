@@ -1,7 +1,10 @@
 package project
 
 import (
+	"slices"
 	"strings"
+
+	"github.com/KogenAI/kogen-loop/sys"
 	"testing"
 )
 
@@ -60,6 +63,8 @@ func TestYAMLProblems(t *testing.T) {
 		{"seq item continuation", "a:\n  - x\n    y\n", 3, "unexpected indentation"},
 		{"duplicate", "a: 1\na: 2\n", 2, "duplicate key a"},
 		{"duplicate in flow map", "a: {b: 1, b: 2}\n", 1, "duplicate key b"},
+		{"bare seq", "x: [", 1, "unclosed ["},
+		{"bare map", "a: {", 1, "unclosed {"},
 		{"unclosed seq", "a: [1, 2\n", 1, "unclosed ["},
 		{"unclosed map", "a: {b: 1\n", 1, "unclosed {"},
 		{"flow pair without key", "a: {b}\n", 1, "expected key: value in {...}"},
@@ -174,5 +179,18 @@ func TestYAMLSpaceIndentedSequencePreservesScalars(t *testing.T) {
 		if got := seq.items[i]; got.kind != kindScalar || got.text != want {
 			t.Errorf("item %d = %+v, want %q", i, got, want)
 		}
+	}
+}
+
+func TestYAMLUnfinishedSequenceConfig(t *testing.T) {
+	const file = ".kogen/project.yaml"
+	cfg, err := ParseConfig("version: 1\ncommands: {setup: [\n", file)
+	se, ok := sys.AsError(err)
+	if cfg != nil || !ok || se.Class != "environment" || se.Reason != "project_config_invalid" || se.Detail != file || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: unclosed ["}) {
+		t.Fatalf("got config %v, error %v", cfg, err)
+	}
+	cfg, err = ParseConfig("version: 1\ncommands: {setup: []}\n", file)
+	if err != nil || cfg == nil {
+		t.Fatalf("got config %v, error %v", cfg, err)
 	}
 }

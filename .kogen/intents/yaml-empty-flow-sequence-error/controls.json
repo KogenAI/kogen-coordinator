@@ -1,0 +1,61 @@
+{
+  "correct": {
+    "files": {
+      "project/yaml.go": {
+        "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -283,6 +283,9 @@\n \t\tif first && len(text) > 0 && text[0] == closer {\n \t\t\treturn text[1:]\n \t\t}\n+\t\tif text == \"\" {\n+\t\t\tfailAt(n, \"unclosed \"+open)\n+\t\t}\n \t\trest := item(trimLeftSpace(text))\n \t\tfirst = false\n \t\tr := trimLeftSpace(rest)\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "Empty item reaches an unchecked index",
+      "scenario": "An opener alone reports a sequence parse problem",
+      "step": "Then yaml-empty-flow-sequence-error: it returns exactly this result without a panic",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -240,7 +240,7 @@\n \n func flow(text string, n int) (*yamlNode, string) {\n \tswitch {\n-\tcase strings.HasPrefix(text, \"[\"):\n+\tcase text[0] == '[':\n \t\tvar items []*yamlNode\n \t\trest := flowItems(trimLeftSpace(text[1:]), n, ']', func(t string) string {\n \t\t\tnode, r := flow(t, n)\n@@ -283,7 +283,7 @@\n \t\tif first && len(text) > 0 && text[0] == closer {\n \t\t\treturn text[1:]\n \t\t}\n-\t\tif text == \"\" {\n+\t\tif text == \"\" && closer == '}' {\n \t\t\tfailAt(n, \"unclosed \"+open)\n \t\t}\n \t\trest := item(trimLeftSpace(text))\n"
+        }
+      }
+    },
+    {
+      "name": "Bare map opener fails as an invalid pair rather than an unclosed map",
+      "scenario": "A map opener reports an unclosed mapping",
+      "step": "Then yaml-empty-flow-sequence-error: it returns exactly this result without a panic",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -283,8 +283,8 @@\n \t\tif first && len(text) > 0 && text[0] == closer {\n \t\t\treturn text[1:]\n \t\t}\n-\t\tif text == \"\" {\n-\t\t\tfailAt(n, \"unclosed \"+open)\n+\t\tif closer == ']' && text == \"\" {\n+\t\t\tfailAt(n, \"unclosed [\")\n \t\t}\n \t\trest := item(trimLeftSpace(text))\n \t\tfirst = false\n"
+        }
+      }
+    },
+    {
+      "name": "Nonempty sequence changes its diagnostic",
+      "scenario": "A nonempty unclosed sequence keeps its diagnostic",
+      "step": "Then yaml-empty-flow-sequence-error: it returns exactly this result without a panic",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -295,6 +295,9 @@\n \t\tcase len(r) > 0 && r[0] == closer:\n \t\t\treturn r[1:]\n \t\tdefault:\n+\t\t\tif closer == ']' {\n+\t\t\t\tfailAt(n, \"expected closing ]\")\n+\t\t\t}\n \t\t\tfailAt(n, \"unclosed \"+open)\n \t\t}\n \t}\n"
+        }
+      }
+    },
+    {
+      "name": "Fix only direct block values, leaving inline map members exposed",
+      "scenario": "ParseConfig classifies an unfinished flow sequence",
+      "step": "Then yaml-empty-flow-sequence-error: it returns exactly this result without a panic",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -225,6 +225,9 @@\n // runs to the end of the line (commas and brackets are part of it, as in\n // `run: python3 -c \"print(1, 2)\"`).\n func yamlValue(text string, n int) *yamlNode {\n+\tif text == \"[\" {\n+\t\tfailAt(n, \"unclosed [\")\n+\t}\n \tvar node *yamlNode\n \tvar rest string\n \tif strings.ContainsRune(\"[{\\\"'\", rune(text[0])) {\n@@ -240,7 +243,7 @@\n \n func flow(text string, n int) (*yamlNode, string) {\n \tswitch {\n-\tcase strings.HasPrefix(text, \"[\"):\n+\tcase text[0] == '[':\n \t\tvar items []*yamlNode\n \t\trest := flowItems(trimLeftSpace(text[1:]), n, ']', func(t string) string {\n \t\t\tnode, r := flow(t, n)\n@@ -283,7 +286,7 @@\n \t\tif first && len(text) > 0 && text[0] == closer {\n \t\t\treturn text[1:]\n \t\t}\n-\t\tif text == \"\" {\n+\t\tif text == \"\" && closer == '}' {\n \t\t\tfailAt(n, \"unclosed \"+open)\n \t\t}\n \t\trest := item(trimLeftSpace(text))\n"
+        }
+      }
+    },
+    {
+      "name": "Reject the closed empty sequence too",
+      "scenario": "ParseConfig still accepts a closed empty flow sequence",
+      "step": "Then yaml-empty-flow-sequence-error: it returns exactly this result without a panic",
+      "files": {
+        "project/yaml.go": {
+          "patch": "--- a/project/yaml.go\n+++ b/project/yaml.go\n@@ -281,6 +281,9 @@\n \tfirst := true\n \tfor {\n \t\tif first && len(text) > 0 && text[0] == closer {\n+\t\t\tif closer == ']' {\n+\t\t\t\tfailAt(n, \"unclosed [\")\n+\t\t\t}\n \t\t\treturn text[1:]\n \t\t}\n \t\tif text == \"\" {\n"
+        }
+      }
+    }
+  ]
+}
