@@ -103,6 +103,15 @@ func TestLiveAndHash(t *testing.T) {
 	}
 }
 
+func TestUniqueKeysInSeparateRules(t *testing.T) {
+	f := newFx(t, "hold")
+	f.body = `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"repo","topic":"t","text":"first","owner":"o","overrides":null},{"id":"b","revision":2,"scope":"repo","topic":"u","text":"second","owner":"o","overrides":null}]}`
+	s, err := f.load()
+	if err != nil || s == nil || s.Origin != rules.Live || s.FallbackReason != "" || len(s.Rules) != 2 || s.Rules[0].ID != "a" || s.Rules[1].ID != "b" {
+		t.Fatalf("live: %+v %v", s, err)
+	}
+}
+
 func TestOutageUsesVerifiedSameScopeCache(t *testing.T) {
 	f := newFx(t, "hold")
 	live, err := f.load()
@@ -118,6 +127,15 @@ func TestOutageUsesVerifiedSameScopeCache(t *testing.T) {
 	c, err = f.load()
 	if err != nil || c.FallbackReason != "malformed_response" || c.ContentHash != live.ContentHash {
 		t.Fatalf("malformed: %+v %v", c, err)
+	}
+
+	f.body = `{"product":"other","product":"kogen","repo":"r","rules":[{"id":"a","revision":2,"scope":"repo","topic":"t","text":"replacement","owner":"o","overrides":null}]}`
+	c, err = f.load()
+	want := *live
+	want.Origin = rules.Cached
+	want.FallbackReason = "malformed_response"
+	if err != nil || !reflect.DeepEqual(c, &want) {
+		t.Fatalf("duplicate fallback: got %+v %v, want %+v", c, err, &want)
 	}
 	f.config(strings.Replace(readConfig(t, f), "repo: r", "repo: other", 1))
 	f.status = 503
@@ -163,15 +181,19 @@ func TestPolicyWithoutCache(t *testing.T) {
 func TestMalformedResponses(t *testing.T) {
 	good := `{"id":"a","revision":1,"scope":"s","topic":"t","text":"x","owner":"o","overrides":null}`
 	for name, body := range map[string]string{
-		"not-object":      `[]`,
-		"rules-null":      `{"product":"kogen","repo":"r","rules":null}`,
-		"wrong-product":   `{"product":"x","repo":"r","rules":[]}`,
-		"null-revision":   `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":null,"scope":"s","topic":"t","text":"x","owner":"o","overrides":null}]}`,
-		"no-overrides":    `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":"x","owner":"o"}]}`,
-		"empty-owner":     `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":"x","owner":"","overrides":null}]}`,
-		"numeric-text":    `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":1,"owner":"o","overrides":null}]}`,
-		"duplicate-id":    `{"product":"kogen","repo":"r","rules":[` + good + `,` + strings.Replace(good, `"topic":"t"`, `"topic":"u"`, 1) + `]}`,
-		"duplicate-topic": `{"product":"kogen","repo":"r","rules":[` + good + `,` + strings.Replace(good, `"id":"a"`, `"id":"b"`, 1) + `]}`,
+
+		"duplicate-product":    `{"product":"other","product":"kogen","repo":"r","rules":[]}`,
+		"duplicate-decoded":    `{"product":"kogen","repo":"r","rules":[],"future":true,"f\u0075ture":true}`,
+		"duplicate-rule-field": `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":"old","text":"x","owner":"o","overrides":null}]}`,
+		"not-object":           `[]`,
+		"rules-null":           `{"product":"kogen","repo":"r","rules":null}`,
+		"wrong-product":        `{"product":"x","repo":"r","rules":[]}`,
+		"null-revision":        `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":null,"scope":"s","topic":"t","text":"x","owner":"o","overrides":null}]}`,
+		"no-overrides":         `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":"x","owner":"o"}]}`,
+		"empty-owner":          `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":"x","owner":"","overrides":null}]}`,
+		"numeric-text":         `{"product":"kogen","repo":"r","rules":[{"id":"a","revision":1,"scope":"s","topic":"t","text":1,"owner":"o","overrides":null}]}`,
+		"duplicate-id":         `{"product":"kogen","repo":"r","rules":[` + good + `,` + strings.Replace(good, `"topic":"t"`, `"topic":"u"`, 1) + `]}`,
+		"duplicate-topic":      `{"product":"kogen","repo":"r","rules":[` + good + `,` + strings.Replace(good, `"id":"a"`, `"id":"b"`, 1) + `]}`,
 	} {
 		f := newFx(t, "hold")
 		f.body = body

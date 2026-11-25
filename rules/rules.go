@@ -191,9 +191,45 @@ func rawString(raw json.RawMessage) (string, bool) {
 	return s, true
 }
 
+// decodeObject preserves member names until duplicates have been checked. Values remain raw,
+// so nested objects retain their existing validation semantics.
+func decodeObject(data []byte) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	object := make(map[string]json.RawMessage)
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := tok.(string)
+		if !ok {
+			return nil, false
+		}
+		if _, exists := object[name]; exists {
+			return nil, false
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return nil, false
+		}
+		object[name] = value
+	}
+	if tok, err = dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, false
+	}
+	if _, err = dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return object, true
+}
+
 func parseResponse(body []byte, cfg Config) ([]Rule, bool) {
-	var top map[string]json.RawMessage
-	if json.Unmarshal(body, &top) != nil || top == nil {
+	top, valid := decodeObject(body)
+	if !valid {
 		return nil, false
 	}
 	if p, ok := rawString(top["product"]); !ok || p != cfg.ProductID {
@@ -205,15 +241,16 @@ func parseResponse(body []byte, cfg Config) ([]Rule, bool) {
 	if raw := bytes.TrimSpace(top["rules"]); len(raw) == 0 || raw[0] != '[' {
 		return nil, false
 	}
-	var items []map[string]json.RawMessage
+	var items []json.RawMessage
 	if json.Unmarshal(top["rules"], &items) != nil {
 		return nil, false
 	}
 	rules := make([]Rule, 0, len(items))
 	ids := map[string]bool{}
 	topics := map[string]bool{}
-	for _, item := range items {
-		if item == nil {
+	for _, raw := range items {
+		item, valid := decodeObject(raw)
+		if !valid {
 			return nil, false
 		}
 		var r Rule

@@ -1,0 +1,61 @@
+{
+  "correct": {
+    "files": {
+      "rules/rules.go": {
+        "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -191,9 +191,40 @@\n \treturn s, true\n }\n \n+// decodeUniqueObject keeps each member value raw and compares decoded keys within this object only.\n+func decodeUniqueObject(raw []byte) (map[string]json.RawMessage, bool) {\n+\tdec := json.NewDecoder(bytes.NewReader(raw))\n+\tif token, err := dec.Token(); err != nil || token != json.Delim('{') {\n+\t\treturn nil, false\n+\t}\n+\tmembers := make(map[string]json.RawMessage)\n+\tfor dec.More() {\n+\t\ttoken, err := dec.Token()\n+\t\tkey, ok := token.(string)\n+\t\tif err != nil || !ok {\n+\t\t\treturn nil, false\n+\t\t}\n+\t\tif _, duplicate := members[key]; duplicate {\n+\t\t\treturn nil, false\n+\t\t}\n+\t\tvar value json.RawMessage\n+\t\tif dec.Decode(&value) != nil {\n+\t\t\treturn nil, false\n+\t\t}\n+\t\tmembers[key] = value\n+\t}\n+\tif token, err := dec.Token(); err != nil || token != json.Delim('}') {\n+\t\treturn nil, false\n+\t}\n+\tif _, err := dec.Token(); err != io.EOF {\n+\t\treturn nil, false\n+\t}\n+\treturn members, true\n+}\n+\n func parseResponse(body []byte, cfg Config) ([]Rule, bool) {\n-\tvar top map[string]json.RawMessage\n-\tif json.Unmarshal(body, &top) != nil || top == nil {\n+\ttop, ok := decodeUniqueObject(body)\n+\tif !ok {\n \t\treturn nil, false\n \t}\n \tif p, ok := rawString(top[\"product\"]); !ok || p != cfg.ProductID {\n@@ -205,15 +236,16 @@\n \tif raw := bytes.TrimSpace(top[\"rules\"]); len(raw) == 0 || raw[0] != '[' {\n \t\treturn nil, false\n \t}\n-\tvar items []map[string]json.RawMessage\n+\tvar items []json.RawMessage\n \tif json.Unmarshal(top[\"rules\"], &items) != nil {\n \t\treturn nil, false\n \t}\n \trules := make([]Rule, 0, len(items))\n \tids := map[string]bool{}\n \ttopics := map[string]bool{}\n-\tfor _, item := range items {\n-\t\tif item == nil {\n+\tfor _, raw := range items {\n+\t\titem, valid := decodeUniqueObject(raw)\n+\t\tif !valid {\n \t\t\treturn nil, false\n \t\t}\n \t\tvar r Rule\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "keep last top-level value",
+      "scenario": "Reject a duplicate top-level product key",
+      "step": "Then rules-reject-duplicate-json-keys: the load outcome is",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -223,8 +223,8 @@\n }\n \n func parseResponse(body []byte, cfg Config) ([]Rule, bool) {\n-\ttop, ok := decodeUniqueObject(body)\n-\tif !ok {\n+\tvar top map[string]json.RawMessage\n+\tif json.Unmarshal(body, &top) != nil || top == nil {\n \t\treturn nil, false\n \t}\n \tif p, ok := rawString(top[\"product\"]); !ok || p != cfg.ProductID {\n"
+        }
+      }
+    },
+    {
+      "name": "keep last rule field value",
+      "scenario": "Reject duplicate keys within a rule",
+      "step": "Then rules-reject-duplicate-json-keys: the load outcome is",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -244,8 +244,8 @@\n \tids := map[string]bool{}\n \ttopics := map[string]bool{}\n \tfor _, raw := range items {\n-\t\titem, valid := decodeUniqueObject(raw)\n-\t\tif !valid {\n+\t\tvar item map[string]json.RawMessage\n+\t\tif json.Unmarshal(raw, &item) != nil || item == nil {\n \t\t\treturn nil, false\n \t\t}\n \t\tvar r Rule\n"
+        }
+      }
+    },
+    {
+      "name": "skip verified cache on malformed response",
+      "scenario": "Use the verified cache after a duplicate-key response",
+      "step": "Then rules-reject-duplicate-json-keys: the load outcome is",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -128,7 +128,7 @@\n \t\treturn snap, nil\n \t}\n \n-\tif cached := readCache(root, scope); cached != nil {\n+\tif cached := readCache(root, scope); cached != nil && reason != \"malformed_response\" {\n \t\tcached.Origin = Cached\n \t\tcached.FallbackReason = reason\n \t\tlogSnapshot(opts, cached)\n"
+        }
+      }
+    },
+    {
+      "name": "share field names across sibling rules",
+      "scenario": "Load a valid response with unique keys as live",
+      "step": "Then rules-reject-duplicate-json-keys: the load outcome is",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -243,10 +243,17 @@\n \trules := make([]Rule, 0, len(items))\n \tids := map[string]bool{}\n \ttopics := map[string]bool{}\n+\tseenFields := map[string]bool{}\n \tfor _, raw := range items {\n \t\titem, valid := decodeUniqueObject(raw)\n \t\tif !valid {\n \t\t\treturn nil, false\n+\t\t}\n+\t\tfor key := range item {\n+\t\t\tif seenFields[key] {\n+\t\t\t\treturn nil, false\n+\t\t\t}\n+\t\t\tseenFields[key] = true\n \t\t}\n \t\tvar r Rule\n \t\tvar ok [5]bool\n"
+        }
+      }
+    },
+    {
+      "name": "check only schema-listed keys",
+      "scenario": "Reject keys with the same decoded name and value",
+      "step": "Then rules-reject-duplicate-json-keys: the load outcome is",
+      "files": {
+        "rules/rules.go": {
+          "patch": "--- a/rules/rules.go\n+++ b/rules/rules.go\n@@ -205,7 +205,10 @@\n \t\t\treturn nil, false\n \t\t}\n \t\tif _, duplicate := members[key]; duplicate {\n-\t\t\treturn nil, false\n+\t\t\tswitch key {\n+\t\t\tcase \"product\", \"repo\", \"rules\", \"id\", \"revision\", \"scope\", \"topic\", \"text\", \"owner\", \"overrides\":\n+\t\t\t\treturn nil, false\n+\t\t\t}\n \t\t}\n \t\tvar value json.RawMessage\n \t\tif dec.Decode(&value) != nil {\n"
+        }
+      }
+    }
+  ]
+}
