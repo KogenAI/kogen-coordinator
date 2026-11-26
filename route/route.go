@@ -123,8 +123,14 @@ func cycle[E, A any](ctx context.Context, s Steps[E, A], builderPass bool, drift
 // Build must land: a red candidate after a drifted approval is an error. As in Cycle, the context
 // is checked between steps, before each Approved, Fresh, Review, Continue and Commit: a cancelled
 // context returns its error (unwrapped) and starts no further step; a step already running, a
-// commit included, is never interrupted.
+// commit included, is never interrupted. Unrecognized stages are rejected with an error naming
+// the stage before any Steps method is called.
 func Resume[E, A any](ctx context.Context, s Steps[E, A], stage string) error {
+	switch stage {
+	case StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:
+	default:
+		return fmt.Errorf("unrecognized resume stage %q", stage)
+	}
 	var approval A
 	var err error
 	switch {

@@ -132,6 +132,28 @@ func TestCycleStopsAtAStep(t *testing.T) {
 	check(t, f, "verify builder=no")
 }
 
+// observingFake also records capability queries, which the regular phase trace omits.
+type observingFake struct{ *fake }
+
+func (f *observingFake) Continuable() bool {
+	f.note("continuable")
+	return f.continuing
+}
+
+func TestResumeRejectsUnknownStageWithoutCallingSteps(t *testing.T) {
+	for _, continuing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "continuable", false: "not continuable"}[continuing], func(t *testing.T) {
+			f := &observingFake{&fake{continuing: continuing}}
+			const stage = "unknown-checkpoint-stage"
+			err := Resume(context.Background(), f, stage)
+			if err == nil || !strings.Contains(err.Error(), stage) {
+				t.Fatalf("expected error naming %q, got %v", stage, err)
+			}
+			check(t, f.fake)
+		})
+	}
+}
+
 func TestResumeFinishesAFailedCommitAlone(t *testing.T) {
 	f := &fake{}
 	if err := Resume(context.Background(), f, StageCommitFailed); err != nil {

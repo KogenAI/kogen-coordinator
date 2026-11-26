@@ -1,0 +1,211 @@
+{
+  "good": [
+    {
+      "name": "unknown-true",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "true",
+      "actual": {
+        "error": "unrecognized checkpoint stage \"unknown-checkpoint-stage\"",
+        "calls": []
+      }
+    },
+    {
+      "name": "unknown-false",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "false",
+      "actual": {
+        "error": "unrecognized checkpoint stage \"unknown-checkpoint-stage\"",
+        "calls": []
+      }
+    },
+    {
+      "name": "review-true",
+      "stage": "review",
+      "continuable": "true",
+      "phases": "[\"continue\",\"commit approved saved\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "continue",
+          "commit approved saved"
+        ]
+      }
+    },
+    {
+      "name": "review_verify-true",
+      "stage": "review_verify",
+      "continuable": "true",
+      "phases": "[\"continue\",\"commit approved saved\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "continue",
+          "commit approved saved"
+        ]
+      }
+    },
+    {
+      "name": "review_retry_verify-true",
+      "stage": "review_retry_verify",
+      "continuable": "true",
+      "phases": "[\"continue\",\"commit approved saved\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "continue",
+          "commit approved saved"
+        ]
+      }
+    },
+    {
+      "name": "review-false",
+      "stage": "review",
+      "continuable": "false",
+      "phases": "[\"fresh review\",\"review base\",\"commit approved base\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "fresh review",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "review_verify-false",
+      "stage": "review_verify",
+      "continuable": "false",
+      "phases": "[\"fresh review_verify\",\"review base\",\"commit approved base\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "fresh review_verify",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "review_retry_verify-false",
+      "stage": "review_retry_verify",
+      "continuable": "false",
+      "phases": "[\"fresh review_retry_verify\",\"review base\",\"commit approved base\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "fresh review_retry_verify",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "review_only-true",
+      "stage": "review_only",
+      "continuable": "true",
+      "phases": "[\"fresh review_only\",\"review base\",\"commit approved base\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "fresh review_only",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "review_only-false",
+      "stage": "review_only",
+      "continuable": "false",
+      "phases": "[\"fresh review_only\",\"review base\",\"commit approved base\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "fresh review_only",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "commit_failed-true",
+      "stage": "commit_failed",
+      "continuable": "true",
+      "phases": "[\"approved\",\"commit approved saved (no restart)\"]",
+      "actual": {
+        "error": null,
+        "calls": [
+          "approved",
+          "commit approved saved (no restart)"
+        ]
+      }
+    }
+  ],
+  "bad": [
+    {
+      "name": "unknown-routed-to-continue",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "true",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "continuable",
+          "continue",
+          "commit approved saved"
+        ]
+      }
+    },
+    {
+      "name": "unknown-routed-to-fresh",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "false",
+      "actual": {
+        "error": null,
+        "calls": [
+          "continuable",
+          "continuable",
+          "fresh unknown-checkpoint-stage",
+          "review base",
+          "commit approved base"
+        ]
+      }
+    },
+    {
+      "name": "recognized-review-variants-rejected",
+      "stage": "review_verify",
+      "continuable": "true",
+      "phases": "[\"continue\",\"commit approved saved\"]",
+      "actual": {
+        "error": "unrecognized checkpoint stage \"review_verify\"",
+        "calls": []
+      }
+    },
+    {
+      "name": "error-does-not-name-stage",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "true",
+      "actual": {
+        "error": "unrecognized checkpoint stage",
+        "calls": []
+      }
+    },
+    {
+      "name": "capability-queried-before-refusal",
+      "stage": "unknown-checkpoint-stage",
+      "continuable": "false",
+      "actual": {
+        "error": "unrecognized checkpoint stage \"unknown-checkpoint-stage\"",
+        "calls": [
+          "continuable"
+        ]
+      }
+    }
+  ]
+}

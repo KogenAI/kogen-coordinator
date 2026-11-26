@@ -1,0 +1,61 @@
+{
+  "correct": {
+    "files": {
+      "route/route.go": {
+        "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -123,8 +123,13 @@\n // Build must land: a red candidate after a drifted approval is an error. As in Cycle, the context\n // is checked between steps, before each Approved, Fresh, Review, Continue and Commit: a cancelled\n // context returns its error (unwrapped) and starts no further step; a step already running, a\n-// commit included, is never interrupted.\n+// commit included, is never interrupted. An unrecognized stage is rejected before any step call.\n func Resume[E, A any](ctx context.Context, s Steps[E, A], stage string) error {\n+\tswitch stage {\n+\tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n+\tdefault:\n+\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t}\n \tvar approval A\n \tvar err error\n \tswitch {\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "unknown-routed-to-continue",
+      "scenario": "Refuse an unknown stage with a continuable reviewer",
+      "step": "Then route-resume-stage-validation: Resume returns an error naming the stage without calling any step",
+      "files": {
+        "route/route.go": {
+          "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -128,7 +128,9 @@\n \tswitch stage {\n \tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n \tdefault:\n-\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t\tif !s.Continuable() {\n+\t\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t\t}\n \t}\n \tvar approval A\n \tvar err error\n"
+        }
+      }
+    },
+    {
+      "name": "unknown-routed-to-fresh",
+      "scenario": "Refuse an unknown stage with a non-continuable reviewer",
+      "step": "Then route-resume-stage-validation: Resume returns an error naming the stage without calling any step",
+      "files": {
+        "route/route.go": {
+          "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -128,7 +128,9 @@\n \tswitch stage {\n \tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n \tdefault:\n-\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t\tif s.Continuable() {\n+\t\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t\t}\n \t}\n \tvar approval A\n \tvar err error\n"
+        }
+      }
+    },
+    {
+      "name": "recognized-review-variants-rejected",
+      "scenario": "Keep the existing review and failed commit resume paths",
+      "step": "Then route-resume-stage-validation: each call succeeds with exactly its listed phase calls in order",
+      "files": {
+        "route/route.go": {
+          "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -126,7 +126,7 @@\n // commit included, is never interrupted. An unrecognized stage is rejected before any step call.\n func Resume[E, A any](ctx context.Context, s Steps[E, A], stage string) error {\n \tswitch stage {\n-\tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n+\tcase StageCommitFailed, StageReviewOnly, StageReview:\n \tdefault:\n \t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n \t}\n"
+        }
+      }
+    },
+    {
+      "name": "error-does-not-name-stage",
+      "scenario": "Refuse an unknown stage with a continuable reviewer",
+      "step": "Then route-resume-stage-validation: Resume returns an error naming the stage without calling any step",
+      "files": {
+        "route/route.go": {
+          "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -128,7 +128,7 @@\n \tswitch stage {\n \tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n \tdefault:\n-\t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n+\t\treturn fmt.Errorf(\"unrecognized checkpoint stage\")\n \t}\n \tvar approval A\n \tvar err error\n"
+        }
+      }
+    },
+    {
+      "name": "capability-queried-before-refusal",
+      "scenario": "Refuse an unknown stage with a non-continuable reviewer",
+      "step": "Then route-resume-stage-validation: Resume returns an error naming the stage without calling any step",
+      "files": {
+        "route/route.go": {
+          "patch": "--- a/route/route.go\n+++ b/route/route.go\n@@ -128,6 +128,7 @@\n \tswitch stage {\n \tcase StageCommitFailed, StageReviewOnly, StageReview, StageReviewVerify, StageReviewRetry:\n \tdefault:\n+\t\ts.Continuable()\n \t\treturn fmt.Errorf(\"unrecognized checkpoint stage %q\", stage)\n \t}\n \tvar approval A\n"
+        }
+      }
+    }
+  ]
+}
