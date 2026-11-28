@@ -32,7 +32,7 @@ const DefaultProvider = "chatgpt"
 
 // Role is one model selection. Provider is never empty for a native role; only an external
 // executor's role names none.
-// BaseURL is set only for the openai-compatible provider (the host's /v1 base); it is
+// BaseURL is set only for the openai-compatible and messages-compatible providers (the host's /v1 base); it is
 // omitted from JSON when empty so existing checkpoints keep their bytes.
 //
 // Executor is "" for the native role (including `executor: native`) or "claude-code".
@@ -584,11 +584,11 @@ func modelEffort(node *yamlNode, nonBlank bool) (model, effort string, ok bool) 
 }
 
 // Providers lists the values a role's provider may name, in the order messages list them.
-var Providers = []string{"chatgpt", "supergrok", "opencode-go", "anthropic", "openai-compatible"}
+var Providers = []string{"chatgpt", "supergrok", "opencode-go", "anthropic", "openai-compatible", "messages-compatible"}
 
 // roleConfig applies the provider rules to a role mapping (KOGEN-057): the provider, when
 // given, is one Kogen knows; any model and effort are accepted and sent unchanged (a named
-// provider needs both non-blank). openai-compatible needs base_url, an http(s) URL; no other
+// provider needs both non-blank). Both compatible providers need base_url, an http(s) URL; no other
 // provider takes one. Known models are defaults and documentation hints, never validation.
 func (v *validator) roleConfig(kv []yamlPair, path string, line int, model, effort string) (Role, bool) {
 	provider, _ := stringAt(kv, "provider")
@@ -598,20 +598,21 @@ func (v *validator) roleConfig(kv []yamlPair, path string, line int, model, effo
 		hasBase = hasBase || p.key == "base_url"
 	}
 	base, baseOK := stringAt(kv, "base_url")
+	compatible := provider == "openai-compatible" || provider == "messages-compatible"
 	switch {
 	case present && !slices.Contains(Providers, provider):
-		v.add(line, path+".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible")
+		v.add(line, path+".provider must be chatgpt, supergrok, opencode-go, anthropic, openai-compatible or messages-compatible")
 		return Role{}, false
 	case present && provider != "chatgpt" && (strings.TrimSpace(model) == "" || strings.TrimSpace(effort) == ""):
 		v.add(line, path+" must be {model, effort}")
 		return Role{}, false
-	case hasBase && provider != "openai-compatible":
-		v.add(line, path+".base_url is only for provider openai-compatible")
+	case hasBase && !compatible:
+		v.add(line, path+".base_url is only for provider openai-compatible or messages-compatible")
 		return Role{}, false
-	case provider == "openai-compatible" && !hasBase:
-		v.add(line, path+": openai-compatible needs base_url, for example http://localhost:11434/v1")
+	case compatible && !hasBase:
+		v.add(line, path+": "+provider+" needs base_url, for example http://localhost:11434/v1")
 		return Role{}, false
-	case provider == "openai-compatible" && (!baseOK || !validBaseURL(base)):
+	case compatible && (!baseOK || !validBaseURL(base)):
 		v.add(line, path+".base_url must be an http:// or https:// URL")
 		return Role{}, false
 	}
@@ -622,7 +623,7 @@ func (v *validator) roleConfig(kv []yamlPair, path string, line int, model, effo
 	if present {
 		r.Provider = provider
 	}
-	if provider == "openai-compatible" {
+	if compatible {
 		r.BaseURL = strings.TrimRight(base, "/")
 	}
 	return r, true

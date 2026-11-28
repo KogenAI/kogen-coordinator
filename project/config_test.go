@@ -573,7 +573,7 @@ func TestProviderSelections(t *testing.T) {
 		}
 		for _, provider := range []string{"grok", "xai", "true", "null", "claude", "opencode", "openai", "ollama"} {
 			_, se := parse("model: grok-4.7, effort: low, provider: " + provider)
-			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible"}) {
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + ".provider must be chatgpt, supergrok, opencode-go, anthropic, openai-compatible or messages-compatible"}) {
 				t.Errorf("%s.%s provider %s: %+v", section, role, provider, se)
 			}
 		}
@@ -586,14 +586,36 @@ func TestProviderSelections(t *testing.T) {
 				t.Errorf("%s.%s base %s: %+v %+v", section, role, base, r, se)
 			}
 		}
+		for _, base := range []string{"'https://api.example.com/v1/'", "'http://localhost:8080'"} {
+			r, se := parse("provider: messages-compatible, model: m, effort: arbitrary, base_url: " + base)
+			want := strings.TrimRight(strings.Trim(base, "'"), "/")
+			if se != nil || r != (Role{Provider: "messages-compatible", Model: "m", Effort: "arbitrary", BaseURL: want}) {
+				t.Errorf("%s.%s messages base %s: %+v %+v", section, role, base, r, se)
+			}
+		}
+		for _, c := range []struct{ fields, want string }{
+			{"model: m, effort: high", ": messages-compatible needs base_url, for example http://localhost:11434/v1"},
+			{"model: m, effort: high, base_url: ''", ".base_url must be an http:// or https:// URL"},
+			{"model: m, effort: high, base_url: 'ftp://host'", ".base_url must be an http:// or https:// URL"},
+			{"model: m, effort: high, base_url: 'http://host/?x=1'", ".base_url must be an http:// or https:// URL"},
+			{"model: m, effort: high, base_url: 'http://user@host/'", ".base_url must be an http:// or https:// URL"},
+			{"model: m, effort: high, base_url: 'http://host/#fragment'", ".base_url must be an http:// or https:// URL"},
+			{"effort: high, base_url: 'http://host'", " must be {model, effort}"},
+			{"model: m, effort: ' ', base_url: 'http://host'", " must be {model, effort}"},
+		} {
+			_, se := parse("provider: messages-compatible, " + c.fields)
+			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + c.want}) {
+				t.Errorf("%s.%s messages %s: %+v", section, role, c.fields, se)
+			}
+		}
 		for _, c := range []struct{ fields, want string }{
 			{"provider: openai-compatible, model: m, effort: default", ": openai-compatible needs base_url, for example http://localhost:11434/v1"},
 			{"provider: openai-compatible, model: m, effort: default, base_url: 'ftp://host/v1'", ".base_url must be an http:// or https:// URL"},
 			{"provider: openai-compatible, model: m, effort: default, base_url: 'localhost:11434'", ".base_url must be an http:// or https:// URL"},
 			{"provider: openai-compatible, model: m, effort: default, base_url: 'http://h/v1?x=1'", ".base_url must be an http:// or https:// URL"},
 			{"provider: openai-compatible, model: m, effort: default, base_url: 3", ".base_url must be an http:// or https:// URL"},
-			{"provider: opencode-go, model: kimi-k3, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
-			{"model: gpt-6.1-sol, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible"},
+			{"provider: opencode-go, model: kimi-k3, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible or messages-compatible"},
+			{"model: gpt-6.1-sol, effort: high, base_url: 'http://localhost:1/v1'", ".base_url is only for provider openai-compatible or messages-compatible"},
 		} {
 			_, se := parse(c.fields)
 			if se == nil || se.Exit != 3 || !slices.Equal(se.Lines, []string{"line 2: " + section + "." + role + c.want}) {
@@ -633,6 +655,7 @@ func TestEffortPerRoute(t *testing.T) {
 		{"provider: opencode-go, model: m", "default", true, ""},
 		{"provider: opencode-go, model: m", "ultra", false, "any effort except ultra"},
 		{"provider: openai-compatible, base_url: 'http://h/v1', model: m", "ultra", false, "any effort except ultra"},
+		{"provider: messages-compatible, base_url: 'http://h/v1', model: m", "ultra", false, "any effort except ultra"},
 	} {
 		text := "models:\n  build: {" + tt.fields + ", effort: " + tt.effort + "}\n"
 		_, err := loadModelsText(t, text)

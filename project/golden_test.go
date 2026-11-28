@@ -171,7 +171,7 @@ func openModelSelection(want *goldenError) (*goldenError, bool) {
 			continue
 		}
 		lines = append(lines, strings.Replace(l, "must be chatgpt, supergrok, opencode-go or anthropic",
-			"must be chatgpt, supergrok, opencode-go, anthropic or openai-compatible", 1))
+			"must be chatgpt, supergrok, opencode-go, anthropic, openai-compatible or messages-compatible", 1))
 	}
 	if dropped && len(lines) == 0 {
 		return nil, true
